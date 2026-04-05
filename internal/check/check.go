@@ -145,10 +145,10 @@ func checkClaudeSettings() Result {
 		}
 	}
 
-	// Check settings.local.json first, then settings.json.
+	// Check settings.json first (primary), then settings.local.json (legacy).
 	paths := []string{
-		filepath.Join(home, ".claude", "settings.local.json"),
 		filepath.Join(home, ".claude", "settings.json"),
+		filepath.Join(home, ".claude", "settings.local.json"),
 	}
 
 	for _, p := range paths {

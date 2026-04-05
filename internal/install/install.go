@@ -13,8 +13,12 @@ import (
 	"path/filepath"
 )
 
-const settingsFile = "settings.local.json"
-const fallbackFile = "settings.json"
+// settingsFile is the primary target for MCP registration. Claude Code
+// reliably reads mcpServers from settings.json but not settings.local.json
+// (upstream bug as of 2026-04). We write to settings.json and fall back to
+// settings.local.json for uninstall/check compatibility.
+const settingsFile = "settings.json"
+const fallbackFile = "settings.local.json"
 const serverKey = "rezbldr"
 
 // CopyBinary copies the currently running executable to dstPath, creating
