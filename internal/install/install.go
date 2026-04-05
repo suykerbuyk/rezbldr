@@ -13,12 +13,14 @@ import (
 	"path/filepath"
 )
 
-// settingsFile is the primary target for MCP registration. Claude Code
-// reliably reads mcpServers from settings.json but not settings.local.json
-// (upstream bug as of 2026-04). We write to settings.json and fall back to
-// settings.local.json for uninstall/check compatibility.
-const settingsFile = "settings.json"
-const fallbackFile = "settings.local.json"
+// configFile is the Claude Code user config file (~/.claude.json) where MCP
+// servers are registered under projects[projectPath].mcpServers.
+const configFile = ".claude.json"
+
+// legacySettingsFile is the old location we wrote to before discovering that
+// Claude Code reads MCP servers from ~/.claude.json, not ~/.claude/settings.json.
+const legacySettingsFile = "settings.json"
+const legacyFallbackFile = "settings.local.json"
 const serverKey = "rezbldr"
 
 // CopyBinary copies the currently running executable to dstPath, creating
@@ -79,25 +81,23 @@ func CopyBinary(dstPath string) error {
 }
 
 // Install copies the running binary to binaryPath and registers the MCP
-// server stanza in Claude Code settings.
-// settingsDir is the directory containing settings files (typically ~/.claude).
+// server stanza in Claude Code's user config.
+// configPath is the full path to ~/.claude.json.
+// projectDir is the absolute path to the project directory.
 // vaultPath is the vault path to configure (optional — omit from args if empty).
-func Install(binaryPath, settingsDir, vaultPath string) error {
+func Install(binaryPath, configPath, projectDir, vaultPath string) error {
 	if err := CopyBinary(binaryPath); err != nil {
 		return fmt.Errorf("copying binary: %w", err)
 	}
-	return Register(binaryPath, settingsDir, vaultPath)
+	return Register(binaryPath, configPath, projectDir, vaultPath)
 }
 
-// Register adds or updates the rezbldr MCP server stanza in Claude Code
-// settings without copying the binary. Used by Install after CopyBinary,
-// and directly in tests.
-func Register(binaryPath, settingsDir, vaultPath string) error {
-	path := filepath.Join(settingsDir, settingsFile)
-
-	settings, existed, err := readSettingsFile(path)
+// Register adds or updates the rezbldr MCP server stanza in Claude Code's
+// user config (~/.claude.json) under projects[projectDir].mcpServers.
+func Register(binaryPath, configPath, projectDir, vaultPath string) error {
+	config, existed, err := readSettingsFile(configPath)
 	if err != nil {
-		return fmt.Errorf("reading %s: %w", path, err)
+		return fmt.Errorf("reading %s: %w", configPath, err)
 	}
 
 	// Build the rezbldr stanza.
@@ -107,35 +107,51 @@ func Register(binaryPath, settingsDir, vaultPath string) error {
 	}
 
 	stanza := map[string]interface{}{
+		"type":    "stdio",
 		"command": binaryPath,
 		"args":    args,
 		"env":     map[string]interface{}{},
 	}
 
-	// Ensure mcpServers map exists.
-	mcpServers, ok := settings["mcpServers"].(map[string]interface{})
+	// Navigate to projects[projectDir].mcpServers.
+	projects, ok := config["projects"].(map[string]interface{})
+	if !ok {
+		projects = make(map[string]interface{})
+	}
+
+	project, ok := projects[projectDir].(map[string]interface{})
+	if !ok {
+		project = make(map[string]interface{})
+	}
+
+	mcpServers, ok := project["mcpServers"].(map[string]interface{})
 	if !ok {
 		mcpServers = make(map[string]interface{})
 	}
 
 	mcpServers[serverKey] = stanza
-	settings["mcpServers"] = mcpServers
+	project["mcpServers"] = mcpServers
+	projects[projectDir] = project
+	config["projects"] = projects
 
-	if err := writeSettingsFile(path, settings); err != nil {
+	if err := writeSettingsFile(configPath, config); err != nil {
 		return err
 	}
 
 	if existed {
-		fmt.Printf("Updated rezbldr MCP server in %s\n", path)
+		fmt.Printf("Updated rezbldr MCP server in %s [project: %s]\n", configPath, projectDir)
 	} else {
-		fmt.Printf("Installed rezbldr MCP server in %s\n", path)
+		fmt.Printf("Installed rezbldr MCP server in %s [project: %s]\n", configPath, projectDir)
 	}
 	return nil
 }
 
-// Uninstall removes the rezbldr MCP server stanza from Claude Code settings
-// and optionally removes the installed binary.
-func Uninstall(settingsDir, binaryPath string) error {
+// Uninstall removes the rezbldr MCP server stanza from Claude Code's user
+// config and optionally removes the installed binary.
+// configPath is the full path to ~/.claude.json.
+// projectDir is the absolute project path to unregister from.
+// legacyDir is the legacy settings directory (~/.claude) for cleanup.
+func Uninstall(configPath, projectDir, legacyDir, binaryPath string) error {
 	// Remove the binary if it exists.
 	if binaryPath != "" {
 		if err := os.Remove(binaryPath); err != nil && !os.IsNotExist(err) {
@@ -144,45 +160,66 @@ func Uninstall(settingsDir, binaryPath string) error {
 			fmt.Printf("Removed binary %s\n", binaryPath)
 		}
 	}
-	// Check settings.local.json first, then settings.json.
-	for _, name := range []string{settingsFile, fallbackFile} {
-		path := filepath.Join(settingsDir, name)
 
-		settings, existed, err := readSettingsFile(path)
-		if err != nil {
-			return fmt.Errorf("reading %s: %w", path, err)
+	removed := false
+
+	// Remove from ~/.claude.json projects[projectDir].mcpServers.
+	if config, existed, err := readSettingsFile(configPath); err != nil {
+		return fmt.Errorf("reading %s: %w", configPath, err)
+	} else if existed {
+		if projects, ok := config["projects"].(map[string]interface{}); ok {
+			if project, ok := projects[projectDir].(map[string]interface{}); ok {
+				if mcpServers, ok := project["mcpServers"].(map[string]interface{}); ok {
+					if _, found := mcpServers[serverKey]; found {
+						delete(mcpServers, serverKey)
+						if len(mcpServers) == 0 {
+							delete(project, "mcpServers")
+						} else {
+							project["mcpServers"] = mcpServers
+						}
+						projects[projectDir] = project
+						config["projects"] = projects
+						if err := writeSettingsFile(configPath, config); err != nil {
+							return err
+						}
+						fmt.Printf("Removed rezbldr from %s [project: %s]\n", configPath, projectDir)
+						removed = true
+					}
+				}
+			}
 		}
-		if !existed {
+	}
+
+	// Clean up legacy locations (~/.claude/settings.json, settings.local.json).
+	for _, name := range []string{legacySettingsFile, legacyFallbackFile} {
+		path := filepath.Join(legacyDir, name)
+		settings, existed, err := readSettingsFile(path)
+		if err != nil || !existed {
 			continue
 		}
-
 		mcpServers, ok := settings["mcpServers"].(map[string]interface{})
 		if !ok {
 			continue
 		}
-
 		if _, found := mcpServers[serverKey]; !found {
 			continue
 		}
-
 		delete(mcpServers, serverKey)
-
-		// If mcpServers is now empty, remove the key entirely.
 		if len(mcpServers) == 0 {
 			delete(settings, "mcpServers")
 		} else {
 			settings["mcpServers"] = mcpServers
 		}
-
 		if err := writeSettingsFile(path, settings); err != nil {
 			return err
 		}
-
-		fmt.Printf("Removed rezbldr from %s\n", path)
-		return nil
+		fmt.Printf("Cleaned up legacy rezbldr entry from %s\n", path)
+		removed = true
 	}
 
-	fmt.Println("rezbldr not found in settings")
+	if !removed {
+		fmt.Println("rezbldr not found in settings")
+	}
 	return nil
 }
 

@@ -145,28 +145,37 @@ func checkClaudeSettings() Result {
 		}
 	}
 
-	// Check settings.json first (primary), then settings.local.json (legacy).
-	paths := []string{
-		filepath.Join(home, ".claude", "settings.json"),
-		filepath.Join(home, ".claude", "settings.local.json"),
+	cwd, err := os.Getwd()
+	if err != nil {
+		return Result{
+			Name:   "claude-settings",
+			Status: "warn",
+			Detail: "cannot determine working directory",
+		}
 	}
 
-	for _, p := range paths {
-		if found, file, binaryPath := checkSettingsFile(p); found {
-			if binaryPath != "" {
-				if _, err := os.Stat(binaryPath); err != nil {
-					return Result{
-						Name:   "claude-settings",
-						Status: "warn",
-						Detail: fmt.Sprintf("registered in %s but binary not found at %s (run rezbldr install)", filepath.Base(file), binaryPath),
-					}
+	configPath := filepath.Join(home, ".claude.json")
+	return CheckClaudeConfig(configPath, cwd)
+}
+
+// CheckClaudeConfig checks whether rezbldr is registered in the given
+// Claude Code config file for the given project directory. Exported for
+// testing with controlled paths.
+func CheckClaudeConfig(configPath, projectDir string) Result {
+	if found, binaryPath := checkConfigFile(configPath, projectDir); found {
+		if binaryPath != "" {
+			if _, err := os.Stat(binaryPath); err != nil {
+				return Result{
+					Name:   "claude-settings",
+					Status: "warn",
+					Detail: fmt.Sprintf("registered in %s but binary not found at %s (run rezbldr install)", filepath.Base(configPath), binaryPath),
 				}
 			}
-			return Result{
-				Name:   "claude-settings",
-				Status: "ok",
-				Detail: fmt.Sprintf("rezbldr registered in %s", filepath.Base(file)),
-			}
+		}
+		return Result{
+			Name:   "claude-settings",
+			Status: "ok",
+			Detail: fmt.Sprintf("rezbldr registered in %s", filepath.Base(configPath)),
 		}
 	}
 
@@ -177,41 +186,60 @@ func checkClaudeSettings() Result {
 	}
 }
 
-// checkSettingsFile returns true if the given JSON file contains an
-// mcpServers.rezbldr key, along with the file path and the registered
-// binary command path (if extractable).
-func checkSettingsFile(path string) (bool, string, string) {
+// checkConfigFile looks for rezbldr in ~/.claude.json under
+// projects[projectDir].mcpServers.rezbldr. Returns whether found and the
+// binary command path if extractable.
+func checkConfigFile(path, projectDir string) (bool, string) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return false, "", ""
+		return false, ""
 	}
 
-	var settings map[string]json.RawMessage
-	if err := json.Unmarshal(data, &settings); err != nil {
-		return false, "", ""
+	var config map[string]json.RawMessage
+	if err := json.Unmarshal(data, &config); err != nil {
+		return false, ""
 	}
 
-	mcpRaw, ok := settings["mcpServers"]
+	projectsRaw, ok := config["projects"]
 	if !ok {
-		return false, "", ""
+		return false, ""
+	}
+
+	var projects map[string]json.RawMessage
+	if err := json.Unmarshal(projectsRaw, &projects); err != nil {
+		return false, ""
+	}
+
+	projectRaw, ok := projects[projectDir]
+	if !ok {
+		return false, ""
+	}
+
+	var project map[string]json.RawMessage
+	if err := json.Unmarshal(projectRaw, &project); err != nil {
+		return false, ""
+	}
+
+	mcpRaw, ok := project["mcpServers"]
+	if !ok {
+		return false, ""
 	}
 
 	var servers map[string]json.RawMessage
 	if err := json.Unmarshal(mcpRaw, &servers); err != nil {
-		return false, "", ""
+		return false, ""
 	}
 
 	raw, ok := servers["rezbldr"]
 	if !ok {
-		return false, "", ""
+		return false, ""
 	}
 
-	// Extract the command path from the stanza.
 	var stanza struct {
 		Command string `json:"command"`
 	}
 	if err := json.Unmarshal(raw, &stanza); err == nil && stanza.Command != "" {
-		return true, path, stanza.Command
+		return true, stanza.Command
 	}
-	return true, path, ""
+	return true, ""
 }

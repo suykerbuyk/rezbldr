@@ -121,10 +121,11 @@ func cmdCheck(args []string) {
 
 func cmdInstall(args []string) {
 	fs := flag.NewFlagSet("install", flag.ExitOnError)
-	var vaultPath, prefix, settingsDir string
+	var vaultPath, prefix, configPath, projectDir string
 	fs.StringVar(&vaultPath, "vault", "", "path to Obsidian vault for resume documents (default: ~/obsidian/RezBldrVault)")
 	fs.StringVar(&prefix, "prefix", "", "installation prefix; binary is at PREFIX/bin/rezbldr (default: ~/.local)")
-	fs.StringVar(&settingsDir, "settings-dir", "", "Claude Code settings directory (default: ~/.claude)")
+	fs.StringVar(&configPath, "config", "", "Claude Code config file (default: ~/.claude.json)")
+	fs.StringVar(&projectDir, "project", "", "project directory to register for (default: current directory)")
 	fs.Parse(args)
 
 	home, err := os.UserHomeDir()
@@ -135,27 +136,34 @@ func cmdInstall(args []string) {
 	if vaultPath == "" {
 		vaultPath = os.Getenv("REZBLDR_VAULT")
 	}
-	// vaultPath may remain empty — Install handles that.
 
 	if prefix == "" {
 		prefix = filepath.Join(home, ".local")
 	}
 	binaryPath := filepath.Join(prefix, "bin", "rezbldr")
 
-	if settingsDir == "" {
-		settingsDir = filepath.Join(home, ".claude")
+	if configPath == "" {
+		configPath = filepath.Join(home, ".claude.json")
 	}
 
-	if err := install.Install(binaryPath, settingsDir, vaultPath); err != nil {
+	if projectDir == "" {
+		projectDir, err = os.Getwd()
+		if err != nil {
+			log.Fatalf("cannot determine working directory: %v", err)
+		}
+	}
+
+	if err := install.Install(binaryPath, configPath, projectDir, vaultPath); err != nil {
 		log.Fatalf("install failed: %v", err)
 	}
 }
 
 func cmdUninstall(args []string) {
 	fs := flag.NewFlagSet("uninstall", flag.ExitOnError)
-	var settingsDir, prefix string
-	fs.StringVar(&settingsDir, "settings-dir", "", "Claude Code settings directory (default: ~/.claude)")
+	var configPath, prefix, projectDir string
+	fs.StringVar(&configPath, "config", "", "Claude Code config file (default: ~/.claude.json)")
 	fs.StringVar(&prefix, "prefix", "", "installation prefix; binary is at PREFIX/bin/rezbldr (default: ~/.local)")
+	fs.StringVar(&projectDir, "project", "", "project directory to unregister from (default: current directory)")
 	fs.Parse(args)
 
 	home, err := os.UserHomeDir()
@@ -163,16 +171,23 @@ func cmdUninstall(args []string) {
 		log.Fatalf("cannot determine home directory: %v", err)
 	}
 
-	if settingsDir == "" {
-		settingsDir = filepath.Join(home, ".claude")
+	if configPath == "" {
+		configPath = filepath.Join(home, ".claude.json")
 	}
 	if prefix == "" {
 		prefix = filepath.Join(home, ".local")
 	}
+	if projectDir == "" {
+		projectDir, err = os.Getwd()
+		if err != nil {
+			log.Fatalf("cannot determine working directory: %v", err)
+		}
+	}
 
 	binaryPath := filepath.Join(prefix, "bin", "rezbldr")
+	legacyDir := filepath.Join(home, ".claude")
 
-	if err := install.Uninstall(settingsDir, binaryPath); err != nil {
+	if err := install.Uninstall(configPath, projectDir, legacyDir, binaryPath); err != nil {
 		log.Fatalf("uninstall failed: %v", err)
 	}
 }

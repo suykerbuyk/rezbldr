@@ -99,51 +99,103 @@ func TestCheckContactFile_Missing(t *testing.T) {
 	}
 }
 
-func TestCheckSettingsFile_NotFound(t *testing.T) {
-	found, _, _ := checkSettingsFile("/nonexistent/settings.json")
+func TestCheckConfigFile_NotFound(t *testing.T) {
+	found, _ := checkConfigFile("/nonexistent/.claude.json", "/project")
 	if found {
 		t.Error("expected not found for nonexistent file")
 	}
 }
 
-func TestCheckSettingsFile_WithRezbldr(t *testing.T) {
+func TestCheckConfigFile_WithRezbldr(t *testing.T) {
 	dir := t.TempDir()
-	p := filepath.Join(dir, "settings.json")
-	content := `{"mcpServers":{"rezbldr":{"command":"/usr/local/bin/rezbldr"}}}`
+	p := filepath.Join(dir, ".claude.json")
+	content := `{"projects":{"/project":{"mcpServers":{"rezbldr":{"command":"/usr/local/bin/rezbldr"}}}}}`
 	os.WriteFile(p, []byte(content), 0o644)
 
-	found, file, cmd := checkSettingsFile(p)
+	found, cmd := checkConfigFile(p, "/project")
 	if !found {
 		t.Error("expected to find rezbldr")
-	}
-	if file != p {
-		t.Errorf("expected file %s, got %s", p, file)
 	}
 	if cmd != "/usr/local/bin/rezbldr" {
 		t.Errorf("expected command /usr/local/bin/rezbldr, got %s", cmd)
 	}
 }
 
-func TestCheckSettingsFile_WithoutRezbldr(t *testing.T) {
+func TestCheckConfigFile_WrongProject(t *testing.T) {
 	dir := t.TempDir()
-	p := filepath.Join(dir, "settings.json")
-	content := `{"mcpServers":{"other":{"command":"other"}}}`
+	p := filepath.Join(dir, ".claude.json")
+	content := `{"projects":{"/other":{"mcpServers":{"rezbldr":{"command":"/usr/local/bin/rezbldr"}}}}}`
 	os.WriteFile(p, []byte(content), 0o644)
 
-	found, _, _ := checkSettingsFile(p)
+	found, _ := checkConfigFile(p, "/project")
+	if found {
+		t.Error("expected not to find rezbldr for different project")
+	}
+}
+
+func TestCheckConfigFile_WithoutRezbldr(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, ".claude.json")
+	content := `{"projects":{"/project":{"mcpServers":{"other":{"command":"other"}}}}}`
+	os.WriteFile(p, []byte(content), 0o644)
+
+	found, _ := checkConfigFile(p, "/project")
 	if found {
 		t.Error("expected not to find rezbldr")
 	}
 }
 
-func TestCheckSettingsFile_InvalidJSON(t *testing.T) {
+func TestCheckConfigFile_InvalidJSON(t *testing.T) {
 	dir := t.TempDir()
-	p := filepath.Join(dir, "settings.json")
+	p := filepath.Join(dir, ".claude.json")
 	os.WriteFile(p, []byte("not json"), 0o644)
 
-	found, _, _ := checkSettingsFile(p)
+	found, _ := checkConfigFile(p, "/project")
 	if found {
 		t.Error("expected not found for invalid JSON")
+	}
+}
+
+func TestCheckClaudeConfig_Registered(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, ".claude.json")
+
+	// Create a binary so the stat check passes.
+	binDir := filepath.Join(dir, "bin")
+	os.MkdirAll(binDir, 0o755)
+	binPath := filepath.Join(binDir, "rezbldr")
+	os.WriteFile(binPath, []byte("binary"), 0o755)
+
+	content := `{"projects":{"/project":{"mcpServers":{"rezbldr":{"command":"` + binPath + `"}}}}}`
+	os.WriteFile(p, []byte(content), 0o644)
+
+	r := CheckClaudeConfig(p, "/project")
+	if r.Status != "ok" {
+		t.Errorf("expected ok, got %s: %s", r.Status, r.Detail)
+	}
+}
+
+func TestCheckClaudeConfig_BinaryMissing(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, ".claude.json")
+	content := `{"projects":{"/project":{"mcpServers":{"rezbldr":{"command":"/nonexistent/rezbldr"}}}}}`
+	os.WriteFile(p, []byte(content), 0o644)
+
+	r := CheckClaudeConfig(p, "/project")
+	if r.Status != "warn" {
+		t.Errorf("expected warn, got %s: %s", r.Status, r.Detail)
+	}
+}
+
+func TestCheckClaudeConfig_NotRegistered(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, ".claude.json")
+	content := `{"projects":{}}`
+	os.WriteFile(p, []byte(content), 0o644)
+
+	r := CheckClaudeConfig(p, "/project")
+	if r.Status != "warn" {
+		t.Errorf("expected warn, got %s: %s", r.Status, r.Detail)
 	}
 }
 
