@@ -5,6 +5,11 @@ BINARY  ?= rezbldr
 PREFIX  ?= $(HOME)/.local
 GOFLAGS ?=
 
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+LDFLAGS := -ldflags "-X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)"
+
 .DEFAULT_GOAL := help
 
 ##@ General
@@ -17,12 +22,7 @@ help: ## Show this help
 ##@ Build
 .PHONY: build
 build: ## Build the rezbldr binary
-	@if [ -z "$$(ls cmd/rezbldr/*.go 2>/dev/null)" ]; then \
-		echo "cmd/rezbldr/ has no Go files yet (Phase 3). Compiling packages only."; \
-		go build $(GOFLAGS) ./...; \
-	else \
-		go build $(GOFLAGS) -o $(BINARY) ./cmd/rezbldr; \
-	fi
+	go build $(GOFLAGS) $(LDFLAGS) -o $(BINARY) ./cmd/rezbldr
 
 ##@ Test
 .PHONY: test

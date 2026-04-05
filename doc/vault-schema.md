@@ -1,6 +1,6 @@
 # Vault Schema Reference
 
-Exact YAML frontmatter schemas from the ResumeCTL vault. These define the
+Exact YAML frontmatter schemas from the rezbldr vault. These define the
 Go struct types for `internal/vault/`.
 
 ## Experience File (`experience/*.md`)

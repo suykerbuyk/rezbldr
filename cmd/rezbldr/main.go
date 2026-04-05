@@ -11,6 +11,15 @@ import (
 	"path/filepath"
 
 	"github.com/mark3labs/mcp-go/server"
+	"github.com/suykerbuyk/rezbldr/internal/check"
+	"github.com/suykerbuyk/rezbldr/internal/install"
+)
+
+// Version variables injected via ldflags at build time.
+var (
+	version = "dev"
+	commit  = "unknown"
+	date    = "unknown"
 )
 
 // Config holds runtime configuration for all tool handlers.
@@ -22,9 +31,60 @@ func main() {
 	log.SetOutput(os.Stderr)
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
+	subcmd := "serve"
+	if len(os.Args) > 1 {
+		subcmd = os.Args[1]
+	}
+
+	switch subcmd {
+	case "serve":
+		cmdServe(os.Args[1:]) // pass remaining args (may include --vault)
+	case "version":
+		cmdVersion()
+	case "install":
+		cmdInstall(os.Args[2:])
+	case "check":
+		cmdCheck(os.Args[2:])
+	case "uninstall":
+		cmdUninstall(os.Args[2:])
+	case "-h", "--help", "help":
+		printUsage()
+	default:
+		// If the first arg looks like a flag, treat it as args to serve.
+		if len(os.Args) > 1 && os.Args[1][0] == '-' {
+			cmdServe(os.Args[1:])
+		} else {
+			fmt.Fprintf(os.Stderr, "unknown subcommand: %s\n\n", subcmd)
+			printUsage()
+			os.Exit(1)
+		}
+	}
+}
+
+func printUsage() {
+	fmt.Fprintf(os.Stderr, `Usage: rezbldr <command> [options]
+
+Commands:
+  serve       Start the MCP server (default)
+  version     Print version information
+  install     Install rezbldr into MCP client config
+  uninstall   Remove rezbldr from MCP client config
+  check       Validate vault and configuration
+  help        Show this help message
+
+Run 'rezbldr serve --help' for serve-specific options.
+`)
+}
+
+func cmdVersion() {
+	fmt.Printf("rezbldr %s (commit: %s, built: %s)\n", version, commit, date)
+}
+
+func cmdCheck(args []string) {
+	fs := flag.NewFlagSet("check", flag.ExitOnError)
 	var vaultPath string
-	flag.StringVar(&vaultPath, "vault", "", "path to ResumeCTL vault")
-	flag.Parse()
+	fs.StringVar(&vaultPath, "vault", "", "path to Obsidian vault for resume documents (default: ~/obsidian/RezBldrVault)")
+	fs.Parse(args)
 
 	if vaultPath == "" {
 		vaultPath = os.Getenv("REZBLDR_VAULT")
@@ -34,7 +94,108 @@ func main() {
 		if err != nil {
 			log.Fatalf("cannot determine home directory: %v", err)
 		}
-		vaultPath = filepath.Join(home, "obsidian", "ResumeCTL")
+		vaultPath = filepath.Join(home, "obsidian", "RezBldrVault")
+	}
+
+	results := check.Run(vaultPath)
+
+	hasFail := false
+	for _, r := range results {
+		var icon string
+		switch r.Status {
+		case "ok":
+			icon = "\u2713" // ✓
+		case "warn":
+			icon = "!"
+		default:
+			icon = "\u2717" // ✗
+			hasFail = true
+		}
+		fmt.Printf("[%s] %s: %s\n", icon, r.Name, r.Detail)
+	}
+
+	if hasFail {
+		os.Exit(1)
+	}
+}
+
+func cmdInstall(args []string) {
+	fs := flag.NewFlagSet("install", flag.ExitOnError)
+	var vaultPath, prefix, settingsDir string
+	fs.StringVar(&vaultPath, "vault", "", "path to Obsidian vault for resume documents (default: ~/obsidian/RezBldrVault)")
+	fs.StringVar(&prefix, "prefix", "", "installation prefix; binary is at PREFIX/bin/rezbldr (default: ~/.local)")
+	fs.StringVar(&settingsDir, "settings-dir", "", "Claude Code settings directory (default: ~/.claude)")
+	fs.Parse(args)
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		log.Fatalf("cannot determine home directory: %v", err)
+	}
+
+	if vaultPath == "" {
+		vaultPath = os.Getenv("REZBLDR_VAULT")
+	}
+	// vaultPath may remain empty — Install handles that.
+
+	if prefix == "" {
+		prefix = filepath.Join(home, ".local")
+	}
+	binaryPath := filepath.Join(prefix, "bin", "rezbldr")
+
+	if settingsDir == "" {
+		settingsDir = filepath.Join(home, ".claude")
+	}
+
+	if err := install.Install(binaryPath, settingsDir, vaultPath); err != nil {
+		log.Fatalf("install failed: %v", err)
+	}
+}
+
+func cmdUninstall(args []string) {
+	fs := flag.NewFlagSet("uninstall", flag.ExitOnError)
+	var settingsDir, prefix string
+	fs.StringVar(&settingsDir, "settings-dir", "", "Claude Code settings directory (default: ~/.claude)")
+	fs.StringVar(&prefix, "prefix", "", "installation prefix; binary is at PREFIX/bin/rezbldr (default: ~/.local)")
+	fs.Parse(args)
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		log.Fatalf("cannot determine home directory: %v", err)
+	}
+
+	if settingsDir == "" {
+		settingsDir = filepath.Join(home, ".claude")
+	}
+	if prefix == "" {
+		prefix = filepath.Join(home, ".local")
+	}
+
+	binaryPath := filepath.Join(prefix, "bin", "rezbldr")
+
+	if err := install.Uninstall(settingsDir, binaryPath); err != nil {
+		log.Fatalf("uninstall failed: %v", err)
+	}
+}
+
+func cmdServe(args []string) {
+	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	var vaultPath string
+	fs.StringVar(&vaultPath, "vault", "", "path to Obsidian vault for resume documents (default: ~/obsidian/RezBldrVault)")
+	// Skip the "serve" subcommand itself if present.
+	if len(args) > 0 && args[0] == "serve" {
+		args = args[1:]
+	}
+	fs.Parse(args)
+
+	if vaultPath == "" {
+		vaultPath = os.Getenv("REZBLDR_VAULT")
+	}
+	if vaultPath == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			log.Fatalf("cannot determine home directory: %v", err)
+		}
+		vaultPath = filepath.Join(home, "obsidian", "RezBldrVault")
 	}
 
 	// Validate vault path exists.
@@ -46,7 +207,7 @@ func main() {
 
 	s := server.NewMCPServer(
 		"rezbldr",
-		"0.1.0",
+		version,
 		server.WithToolCapabilities(true),
 	)
 

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 // Package resolve provides file path resolution and naming convention
-// helpers for the ResumeCTL vault.
+// helpers for the rezbldr vault.
 package resolve
 
 import (
