@@ -53,6 +53,10 @@ func main() {
 	registerRankTool(s, cfg)
 	registerExportTool(s, cfg)
 	registerResolveTool(s, cfg)
+	registerFrontmatterTool(s, cfg)
+	registerScoreDiffTool(s, cfg)
+	registerValidateTool(s, cfg)
+	registerWrapTool(s, cfg)
 
 	log.Printf("rezbldr MCP server starting (vault: %s)", cfg.VaultPath)
 	if err := server.ServeStdio(s); err != nil {
