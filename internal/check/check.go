@@ -152,7 +152,16 @@ func checkClaudeSettings() Result {
 	}
 
 	for _, p := range paths {
-		if found, file := checkSettingsFile(p); found {
+		if found, file, binaryPath := checkSettingsFile(p); found {
+			if binaryPath != "" {
+				if _, err := os.Stat(binaryPath); err != nil {
+					return Result{
+						Name:   "claude-settings",
+						Status: "warn",
+						Detail: fmt.Sprintf("registered in %s but binary not found at %s (run rezbldr install)", filepath.Base(file), binaryPath),
+					}
+				}
+			}
 			return Result{
 				Name:   "claude-settings",
 				Status: "ok",
@@ -164,35 +173,45 @@ func checkClaudeSettings() Result {
 	return Result{
 		Name:   "claude-settings",
 		Status: "warn",
-		Detail: "rezbldr not found in Claude Code MCP settings",
+		Detail: "rezbldr not found in Claude Code MCP settings (run rezbldr install)",
 	}
 }
 
 // checkSettingsFile returns true if the given JSON file contains an
-// mcpServers.rezbldr key.
-func checkSettingsFile(path string) (bool, string) {
+// mcpServers.rezbldr key, along with the file path and the registered
+// binary command path (if extractable).
+func checkSettingsFile(path string) (bool, string, string) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return false, ""
+		return false, "", ""
 	}
 
 	var settings map[string]json.RawMessage
 	if err := json.Unmarshal(data, &settings); err != nil {
-		return false, ""
+		return false, "", ""
 	}
 
 	mcpRaw, ok := settings["mcpServers"]
 	if !ok {
-		return false, ""
+		return false, "", ""
 	}
 
 	var servers map[string]json.RawMessage
 	if err := json.Unmarshal(mcpRaw, &servers); err != nil {
-		return false, ""
+		return false, "", ""
 	}
 
-	if _, ok := servers["rezbldr"]; ok {
-		return true, path
+	raw, ok := servers["rezbldr"]
+	if !ok {
+		return false, "", ""
 	}
-	return false, ""
+
+	// Extract the command path from the stanza.
+	var stanza struct {
+		Command string `json:"command"`
+	}
+	if err := json.Unmarshal(raw, &stanza); err == nil && stanza.Command != "" {
+		return true, path, stanza.Command
+	}
+	return true, path, ""
 }

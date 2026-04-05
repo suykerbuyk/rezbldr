@@ -8,6 +8,7 @@ package install
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 )
@@ -16,11 +17,78 @@ const settingsFile = "settings.local.json"
 const fallbackFile = "settings.json"
 const serverKey = "rezbldr"
 
-// Install adds or updates the rezbldr MCP server stanza in Claude Code settings.
-// binaryPath is the absolute path to the rezbldr binary.
+// CopyBinary copies the currently running executable to dstPath, creating
+// parent directories as needed. If the source and destination are the same
+// file, it is a no-op.
+func CopyBinary(dstPath string) error {
+	srcPath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("determining current executable: %w", err)
+	}
+	srcPath, err = filepath.EvalSymlinks(srcPath)
+	if err != nil {
+		return fmt.Errorf("resolving executable path: %w", err)
+	}
+
+	dstResolved, _ := filepath.EvalSymlinks(dstPath)
+	if srcPath == dstResolved {
+		fmt.Printf("Binary already at %s\n", dstPath)
+		return nil
+	}
+
+	if err := os.MkdirAll(filepath.Dir(dstPath), 0o755); err != nil {
+		return fmt.Errorf("creating directory %s: %w", filepath.Dir(dstPath), err)
+	}
+
+	src, err := os.Open(srcPath)
+	if err != nil {
+		return fmt.Errorf("opening source binary: %w", err)
+	}
+	defer src.Close()
+
+	// Write to a temp file in the same directory, then rename for atomicity.
+	tmp, err := os.CreateTemp(filepath.Dir(dstPath), ".rezbldr-install-*")
+	if err != nil {
+		return fmt.Errorf("creating temp file: %w", err)
+	}
+	tmpPath := tmp.Name()
+
+	if _, err := io.Copy(tmp, src); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("copying binary: %w", err)
+	}
+	tmp.Close()
+
+	if err := os.Chmod(tmpPath, 0o755); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("setting permissions: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, dstPath); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("installing binary to %s: %w", dstPath, err)
+	}
+
+	fmt.Printf("Installed binary to %s\n", dstPath)
+	return nil
+}
+
+// Install copies the running binary to binaryPath and registers the MCP
+// server stanza in Claude Code settings.
 // settingsDir is the directory containing settings files (typically ~/.claude).
 // vaultPath is the vault path to configure (optional — omit from args if empty).
 func Install(binaryPath, settingsDir, vaultPath string) error {
+	if err := CopyBinary(binaryPath); err != nil {
+		return fmt.Errorf("copying binary: %w", err)
+	}
+	return Register(binaryPath, settingsDir, vaultPath)
+}
+
+// Register adds or updates the rezbldr MCP server stanza in Claude Code
+// settings without copying the binary. Used by Install after CopyBinary,
+// and directly in tests.
+func Register(binaryPath, settingsDir, vaultPath string) error {
 	path := filepath.Join(settingsDir, settingsFile)
 
 	settings, existed, err := readSettingsFile(path)

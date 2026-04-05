@@ -100,7 +100,7 @@ func TestCheckContactFile_Missing(t *testing.T) {
 }
 
 func TestCheckSettingsFile_NotFound(t *testing.T) {
-	found, _ := checkSettingsFile("/nonexistent/settings.json")
+	found, _, _ := checkSettingsFile("/nonexistent/settings.json")
 	if found {
 		t.Error("expected not found for nonexistent file")
 	}
@@ -109,15 +109,18 @@ func TestCheckSettingsFile_NotFound(t *testing.T) {
 func TestCheckSettingsFile_WithRezbldr(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "settings.json")
-	content := `{"mcpServers":{"rezbldr":{"command":"rezbldr"}}}`
+	content := `{"mcpServers":{"rezbldr":{"command":"/usr/local/bin/rezbldr"}}}`
 	os.WriteFile(p, []byte(content), 0o644)
 
-	found, file := checkSettingsFile(p)
+	found, file, cmd := checkSettingsFile(p)
 	if !found {
 		t.Error("expected to find rezbldr")
 	}
 	if file != p {
 		t.Errorf("expected file %s, got %s", p, file)
+	}
+	if cmd != "/usr/local/bin/rezbldr" {
+		t.Errorf("expected command /usr/local/bin/rezbldr, got %s", cmd)
 	}
 }
 
@@ -127,7 +130,7 @@ func TestCheckSettingsFile_WithoutRezbldr(t *testing.T) {
 	content := `{"mcpServers":{"other":{"command":"other"}}}`
 	os.WriteFile(p, []byte(content), 0o644)
 
-	found, _ := checkSettingsFile(p)
+	found, _, _ := checkSettingsFile(p)
 	if found {
 		t.Error("expected not to find rezbldr")
 	}
@@ -138,7 +141,7 @@ func TestCheckSettingsFile_InvalidJSON(t *testing.T) {
 	p := filepath.Join(dir, "settings.json")
 	os.WriteFile(p, []byte("not json"), 0o644)
 
-	found, _ := checkSettingsFile(p)
+	found, _, _ := checkSettingsFile(p)
 	if found {
 		t.Error("expected not found for invalid JSON")
 	}

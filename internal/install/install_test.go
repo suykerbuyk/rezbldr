@@ -44,7 +44,7 @@ func getMCPServer(t *testing.T, settings map[string]interface{}, name string) ma
 func TestInstallCreatesNewFile(t *testing.T) {
 	dir := t.TempDir()
 
-	if err := Install("/usr/local/bin/rezbldr", dir, ""); err != nil {
+	if err := Register("/usr/local/bin/rezbldr", dir, ""); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
 
@@ -79,7 +79,7 @@ func TestInstallPreservesExistingServers(t *testing.T) {
 	data = append(data, '\n')
 	os.WriteFile(filepath.Join(dir, settingsFile), data, 0o644)
 
-	if err := Install("/usr/local/bin/rezbldr", dir, ""); err != nil {
+	if err := Register("/usr/local/bin/rezbldr", dir, ""); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
 
@@ -100,7 +100,7 @@ func TestInstallPreservesExistingServers(t *testing.T) {
 func TestInstallWithVaultPath(t *testing.T) {
 	dir := t.TempDir()
 
-	if err := Install("/usr/local/bin/rezbldr", dir, "/home/user/vault"); err != nil {
+	if err := Register("/usr/local/bin/rezbldr", dir, "/home/user/vault"); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
 
@@ -116,7 +116,7 @@ func TestInstallWithVaultPath(t *testing.T) {
 func TestInstallWithoutVaultPath(t *testing.T) {
 	dir := t.TempDir()
 
-	if err := Install("/usr/local/bin/rezbldr", dir, ""); err != nil {
+	if err := Register("/usr/local/bin/rezbldr", dir, ""); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
 
@@ -132,13 +132,13 @@ func TestInstallWithoutVaultPath(t *testing.T) {
 func TestInstallIdempotent(t *testing.T) {
 	dir := t.TempDir()
 
-	if err := Install("/usr/local/bin/rezbldr", dir, "/vault"); err != nil {
+	if err := Register("/usr/local/bin/rezbldr", dir, "/vault"); err != nil {
 		t.Fatalf("first Install: %v", err)
 	}
 
 	first, _ := os.ReadFile(filepath.Join(dir, settingsFile))
 
-	if err := Install("/usr/local/bin/rezbldr", dir, "/vault"); err != nil {
+	if err := Register("/usr/local/bin/rezbldr", dir, "/vault"); err != nil {
 		t.Fatalf("second Install: %v", err)
 	}
 
@@ -245,5 +245,43 @@ func TestUninstallFallsBackToSettingsJSON(t *testing.T) {
 	settings := readJSON(t, filepath.Join(dir, fallbackFile))
 	if _, found := settings["mcpServers"]; found {
 		t.Error("mcpServers should have been removed")
+	}
+}
+
+func TestCopyBinary(t *testing.T) {
+	dir := t.TempDir()
+	dst := filepath.Join(dir, "bin", "rezbldr")
+
+	// CopyBinary copies the test binary (os.Executable) to dst.
+	if err := CopyBinary(dst); err != nil {
+		t.Fatalf("CopyBinary: %v", err)
+	}
+
+	info, err := os.Stat(dst)
+	if err != nil {
+		t.Fatalf("binary not found at %s: %v", dst, err)
+	}
+	if info.Mode().Perm()&0o111 == 0 {
+		t.Errorf("binary at %s is not executable (mode %s)", dst, info.Mode())
+	}
+}
+
+func TestCopyBinaryIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	dst := filepath.Join(dir, "bin", "rezbldr")
+
+	if err := CopyBinary(dst); err != nil {
+		t.Fatalf("first CopyBinary: %v", err)
+	}
+	info1, _ := os.Stat(dst)
+
+	// Second copy should succeed (overwrite).
+	if err := CopyBinary(dst); err != nil {
+		t.Fatalf("second CopyBinary: %v", err)
+	}
+	info2, _ := os.Stat(dst)
+
+	if info1.Size() != info2.Size() {
+		t.Errorf("size mismatch after second copy: %d vs %d", info1.Size(), info2.Size())
 	}
 }
