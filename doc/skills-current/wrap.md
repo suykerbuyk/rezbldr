@@ -41,20 +41,18 @@ Specifically:
 
 Do not add "Co-Authored-By" lines to commit messages or source files.
 
-After committing project files, sync vault changes to all remotes:
+After committing project files, sync vault changes to all remotes by calling
+`rezbldr_wrap` with:
+- `commit_message`: a short summary of the vault changes (e.g., "Update
+  resume.md and iterations.md for iteration N")
+- `files`: array of vault file paths that were modified (resume.md,
+  iterations.md, any task files, etc.)
 
-1. **Discover remotes**: Run `git remote` in the vault directory (read
-   `vault_path` from `~/.config/vibe-vault/config.toml`) to dynamically
-   discover all configured remotes. Do NOT assume any particular remote name
-   (e.g., "origin") — vaults typically use names like `github`, `vault`, etc.
-2. **Commit vault changes**: Run `git -C <vault_path> add -A` then
-   `git -C <vault_path> commit -m "<short summary>"`. If nothing to commit,
-   skip.
-3. **Push to each remote**: For each discovered remote, run
-   `git -C <vault_path> push <remote> main`. If a push fails, show the error
-   and continue to the next remote — do not abort the entire wrap.
-4. If all pushes fail (no remote, network error), warn and proceed — local
-   state is still valid.
+The tool handles staging, committing, remote discovery, and pushing to all
+configured remotes. Report the commit hash and push results.
+
+If `rezbldr_wrap` reports push failures for some remotes, show the errors
+and continue — local state is still valid.
 
 Do not ask for confirmation — just do the updates, stage the files, commit,
 and show the result.

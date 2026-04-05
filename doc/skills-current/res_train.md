@@ -2,64 +2,45 @@ Extract skill gaps from a job posting and create or update training files
 in the `training/` directory.
 
 Input: $ARGUMENTS — path to a job file. If omitted, the most recent file
-in `jobs/` is used automatically.
+in `jobs/target/` is used automatically.
 
-## Step 1: Resolve the job file
+## Step 1: Get ranked data and identify gaps
 
-If `$ARGUMENTS` is provided and is a valid path, use it. If it is just a
-filename (no directory prefix), prepend `jobs/target/`.
+Call `rezbldr_rank` with:
+- `job_file`: $ARGUMENTS if provided, otherwise `"latest"`
+- `top_n`: 99 (we need the full picture, not just top files)
 
-If `$ARGUMENTS` is empty or omitted:
-1. Use Glob with pattern `*.md` in path `jobs/` to list all job files
-   (search recursively including `jobs/target/`).
-2. If no files exist, tell the user: "No job files found. Run `/res_parse`
-   first to create one." Stop here.
-3. Sort by filename (date-prefixed, so lexicographic = chronological).
-4. Use the most recent file. Tell the user which file was selected.
+This returns `match_score` with:
+- `required_misses` — required skills not matched by any experience file
+- `preferred_misses` — preferred skills not matched
+- `required_hits` — required skills that were matched
+- `preferred_hits` — preferred skills that were matched
 
-Read the job file using the Read tool. Parse its frontmatter and body to
-extract: title, company, required skills, preferred skills.
+Tell the user which job file was selected (from `job.file_path`).
 
-If `required_skills` is missing from frontmatter, extract skill requirements
-directly from the body text (look for "Requirements", "Required Qualifications",
-"Skills & Knowledge", or similar sections and pull out technology names and
-skill terms).
+## Step 2: Classify gaps
 
-## Step 2: Load vault data
+Read `profile/skills.md` in parallel with any existing training files
+(Glob `training/*.md`, read each one's frontmatter for `skill` and
+`surfaced_by` fields).
 
-Read these files in parallel (use multiple Read tool calls in one message):
-
-1. **Skills inventory**: Read `profile/skills.md` — parse the markdown table
-   into skill entries (Skill, Proficiency, Last Used, Years, Category).
-
-2. **Experience files**: Use Glob with pattern `*.md` in path `experience/`
-   to list them, then Read each file. Parse frontmatter fields: tags, skills.
-   Also scan body text for technology mentions.
-
-3. **Existing training files**: Use Glob with pattern `*.md` in path
-   `training/` to list any existing training files. Read each one's
-   frontmatter to get the `skill` field and `surfaced_by` array.
-
-## Step 3: Identify gaps
-
-For each required and preferred skill in the job posting:
+For each skill in `required_misses` and `preferred_misses`:
 
 1. **Check skills.md**: Does the skill appear? At what proficiency level?
-2. **Check experience files**: Is there concrete evidence (specific projects,
-   technologies used, metrics)?
-3. **Classify**:
-   - **Strong match**: Skill in skills.md at Advanced/Expert AND backed by
-     experience evidence. Skip — no training needed.
-   - **Partial match**: Skill in skills.md at lower level, OR adjacent skill
-     exists but not the specific tool. Flag for training.
+2. **Classify**:
+   - **Partial match**: Skill is in skills.md at a lower level, OR
+     adjacent/transferable skill exists. Flag for training.
    - **Gap**: No evidence in skills.md or experience files. Flag for training.
 
-For partial matches and gaps, also note:
+Skip any skill that appears in `required_hits` or `preferred_hits` — the
+scoring engine already confirmed these are covered.
+
+For each gap/partial, note:
 - Whether this is a **required** or **preferred** skill
-- What adjacent/transferable skills exist
+- What adjacent/transferable skills exist (from skills.md)
 - A brief note on why this skill matters for the role
 
-## Step 4: Create or update training files
+## Step 3: Create or update training files
 
 For each identified gap or partial match:
 
@@ -166,7 +147,7 @@ Guidelines for learning paths:
 - Keep timelines realistic for a working professional (part-time study)
 - Include certification paths where they add credentialing value
 
-## Step 5: Present summary
+## Step 4: Present summary
 
 After processing all gaps, display:
 
@@ -190,7 +171,7 @@ After processing all gaps, display:
 - Time-to-competency given existing adjacent skills}
 ```
 
-## Step 6: Suggest next steps
+## Step 5: Suggest next steps
 
 - "Run `/res_match` to re-score after completing training items"
 - If the user just ran `/res_match`, remind them the training files are
@@ -201,8 +182,8 @@ After processing all gaps, display:
 ## Error handling
 
 - If `training/` directory doesn't exist, create it.
-- If a job file has no parseable skills, warn the user and suggest
-  `/res_parse` to enrich it.
+- If `rezbldr_rank` returns an error (no job files), tell the user to run
+  `/res_parse` first.
 - Never fabricate gaps. If the candidate has strong evidence for a skill,
   it is not a gap — even if it's not in skills.md.
 - When in doubt about whether something is a gap or partial match, classify

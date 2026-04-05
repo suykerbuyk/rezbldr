@@ -7,15 +7,41 @@ Input: $ARGUMENTS — optional job file path and/or flags:
 - `--max N` to limit experience files included (default: 5)
 
 Parse $ARGUMENTS to extract the job file path and flags. If no path is
-provided, resolve to the most recent file in jobs/target/ (same logic as
-/res_match step 1).
+provided, the most recent file in jobs/target/ is used automatically.
 
-## Step 1: Load all source data
+## Step 1: Rank and select experience files
+
+Call `rezbldr_rank` with:
+- `job_file`: the job file path from $ARGUMENTS, or `"latest"`
+- `top_n`: the `--max` value (default 5)
+
+This returns `job` (title, company, file_path), `ranked[]` (experience files
+sorted by relevance with scores), and `match_score`.
+
+Also include any `highlight: true` file that scored in the top 10, even if
+outside the top N cutoff.
+
+Present the selection to the user:
+
+```
+Building resume for: {job.title} @ {job.company}
+
+Selected experience files (by relevance):
+1. {role} @ {company} ({start}-{end}) — score: {N}
+2. ...
+
+Proceed? (y/n/adjust)
+```
+
+If "adjust": ask which files to add or remove, update the list, continue.
+
+## Step 2: Load source data
 
 Read these files in parallel (multiple Read calls in one message):
 
-1. **Job file**: Read and parse frontmatter (title, company, company_slug,
-   required_skills, preferred_skills, domain, seniority) and full body text.
+1. **Job file**: Read `job.file_path` — parse frontmatter (title, company,
+   company_slug, required_skills, preferred_skills, domain, seniority) and
+   full body text.
 
 2. **Profile data**:
    - `profile/contact.md` — parse frontmatter: name, email, phone, location,
@@ -24,37 +50,8 @@ Read these files in parallel (multiple Read calls in one message):
    - `profile/skills.md` — parse the skills table
    - `profile/publications.md` — read for optional inclusion
 
-3. **Experience files**: Use Glob to list all `experience/*.md`, then Read
-   each one. Parse frontmatter and body text.
-
-## Step 2: Select experience files
-
-Run tag intersection scoring to rank experience files by relevance:
-
-1. Build job keyword set from: required_skills + preferred_skills + tags
-   (lowercased). If frontmatter fields are missing, extract from body text.
-2. Build each experience file's keyword set from: tags + skills (lowercased).
-3. Score: required match = 2.0, preferred = 1.0, tag = 0.5 per match.
-4. Boost `highlight: true` by 10%. Penalize end date > 10 years ago by 30%.
-5. Exclude `visibility: hidden` files.
-6. Select top N files (default 5, or --max value).
-
-Also include any `highlight: true` file that scored in the top 10, even if
-outside the top N cutoff.
-
-Present the selection to the user:
-
-```
-Building resume for: {title} @ {company}
-
-Selected experience files (by relevance):
-1. {role} @ {company} ({start}–{end}) — score: {N}
-2. ...
-
-Proceed? (y/n/adjust)
-```
-
-If "adjust": ask which files to add or remove, update the list, continue.
+3. **Selected experience files**: Read each file from `ranked[].file`.
+   Parse frontmatter and body text.
 
 ## Step 3: Synthesize the resume
 
@@ -146,31 +143,16 @@ version: 1
 For the timestamp, use today's date with a reasonable time. For the model
 field, use "claude-opus-4-6" (the model powering this session).
 
-## Step 5: Validate
+## Step 5: Resolve output path and write
 
-Before presenting to the user, check:
+Call `rezbldr_resolve` with:
+- `type`: `"resume"`
+- `action`: `"generate"`
+- `slug`: the company_slug from the job frontmatter
+- `date`: today's date (YYYY-MM-DD)
 
-1. Professional Summary section exists and is 3-4 sentences
-2. Word count is 600-800 (warn if outside, but proceed)
-3. Every company name in the resume exists in the selected experience files
-4. No skill is claimed that does not appear in skills.md or an experience file
-5. Contact information matches profile/contact.md exactly
-6. Heading hierarchy: exactly one h1, h2 for sections, h3 for roles
-
-Report any validation warnings.
-
-## Step 6: Write the resume file
-
-**Naming convention**: Read `profile/contact.md` to get the candidate's name.
-Lowercase and replace spaces with underscores (e.g., "John Suykerbuyk" →
-"john_suykerbuyk").
-
-Filename: `resumes/generated/{name}_{YYYY-MM-DD}-{company_slug}_resume.md`
-
-Example: `resumes/generated/john_suykerbuyk_2026-04-03-reddit_resume.md`
-
-If the file already exists, append `-v{N}` before `_resume.md` where N is
-the next available version number.
+Use the returned `path` as the output filename. If `exists` is true, append
+`-v{N}` before `_resume.md` where N is the next available version number.
 
 Present the full resume to the user for review. Then ask:
 "Write this resume to `{filepath}`? (y/n/edit)"
@@ -180,6 +162,21 @@ Present the full resume to the user for review. Then ask:
 - "n": Discard. Suggest adjustments and offer to regenerate.
 
 Ensure `resumes/generated/` exists — create with `mkdir -p` via Bash if not.
+
+## Step 6: Validate
+
+Call `rezbldr_validate` with:
+- `resume_path`: the path of the written resume file
+
+Check the response:
+- `word_count_ok` is false → warn about word count ({word_count} words)
+- `heading_errors` is non-empty → fix heading hierarchy issues
+- `unknown_skills` is non-empty → verify skills exist in skills.md
+- `unknown_companies` is non-empty → verify companies match experience files
+- `contact_match` is false → check contact info against profile/contact.md
+- `warnings` → report any additional warnings
+
+If there are fixable issues, fix them and re-validate.
 
 ## Step 7: Cover letter (if --cover-letter)
 
@@ -207,7 +204,7 @@ If the user requested a cover letter, generate one:
 ```yaml
 ---
 job_file: jobs/target/{job filename}
-resume_file: resumes/generated/{name}_{date}-{company_slug}_resume.md
+resume_file: resumes/generated/{resume filename}
 generated: "YYYY-MM-DDTHH:MM:SSZ"
 model: claude-opus-4-6
 status: draft
@@ -233,8 +230,6 @@ Sincerely,
 
 Write to: `cover-letters/{name}_{YYYY-MM-DD}-{company_slug}_cover.md`
 
-Example: `cover-letters/john_suykerbuyk_2026-04-03-reddit_cover.md`
-
 Present to the user for review before writing. Create the directory with
 `mkdir -p cover-letters` via Bash if needed.
 
@@ -242,5 +237,5 @@ Present to the user for review before writing. Create the directory with
 
 After writing, suggest:
 - "Review the draft and set `status: ready` in frontmatter when satisfied"
-- "Run `/res_export resumes/generated/{filename}` to render as DOCX or PDF"
+- "Run `/res_export` to render as DOCX or PDF"
 - "Run `/res_match` first if you want to see the full gap analysis"
