@@ -147,7 +147,7 @@ only fires for creative synthesis and interactive coaching.
 
 ### Tool Definitions
 
-#### `vault_rank` — Experience File Scoring
+#### `rezbldr_rank` — Experience File Scoring
 ```
 Input:  job_file path (or "latest")
 Output: JSON array of {file, role, company, score, matched_required[],
@@ -157,7 +157,7 @@ Implements the tag intersection algorithm once, correctly, testably.
 Eliminates the duplicated scoring logic from /res_match and /res_build.
 Pre-loads and caches frontmatter from experience files.
 
-#### `vault_resolve` — File Path Resolution
+#### `rezbldr_resolve` — File Path Resolution
 ```
 Input:  type ("job"|"resume"|"cover"), slug (optional), date (optional)
 Output: {path, exists, alternatives[]}
@@ -166,7 +166,7 @@ Handles the "most recent file in directory" pattern, naming convention
 generation, version numbering, and directory creation. One tool replaces
 the file resolution preamble from 4 different skills.
 
-#### `vault_validate` — Resume Validation
+#### `rezbldr_validate` — Resume Validation
 ```
 Input:  resume_path
 Output: {word_count, heading_errors[], unknown_skills[], missing_companies[],
@@ -177,7 +177,7 @@ hierarchy (h1/h2/h3), skills against skills.md, companies against
 experience files, contact info against contact.md. Returns structured
 results so the LLM can fix issues without re-reading source files.
 
-#### `vault_export` — Pandoc Export Pipeline
+#### `rezbldr_export` — Pandoc Export Pipeline
 ```
 Input:  source_path, format ("docx"|"pdf"), template (optional)
 Output: {resume_path, resume_size, cover_path, cover_size, errors[]}
@@ -187,7 +187,7 @@ runs pandoc, auto-discovers matching cover letter, exports both, cleans up.
 Zero LLM involvement. Could be invoked directly by the user or by other
 tools.
 
-#### `vault_frontmatter` — YAML Frontmatter Parser
+#### `rezbldr_frontmatter` — YAML Frontmatter Parser
 ```
 Input:  file_path, action ("parse"|"generate"|"strip")
 Output: JSON object of frontmatter fields, or cleaned markdown body
@@ -195,7 +195,7 @@ Output: JSON object of frontmatter fields, or cleaned markdown body
 The LLM currently spends tokens on "parse frontmatter" instructions in
 every skill. This extracts it once as structured JSON.
 
-#### `vault_wrap` — Git Operations
+#### `rezbldr_wrap` — Git Operations
 ```
 Input:  commit_message, files[] (explicit paths)
 Output: {committed: bool, hash, push_results: [{remote, success, error}]}
@@ -204,7 +204,7 @@ Stages specified files, commits with message, discovers and pushes to all
 remotes. Replaces the git portion of /wrap. The LLM still writes the
 commit message and narrative — this tool just executes.
 
-#### `vault_score_diff` — Before/After Scoring
+#### `rezbldr_score_diff` — Before/After Scoring
 ```
 Input:  job_file, changes[] (file edits made during coaching)
 Output: {old_score, new_score, delta, improved_skills[]}
@@ -219,42 +219,42 @@ After offloading to `resumectl-mcp`:
 #### `/res_parse` (Simplified)
 1. Determine input type → fetch/read content
 2. **LLM (Haiku subagent):** Extract structured fields from raw text
-3. `vault_resolve` → generate filename
+3. `rezbldr_resolve` → generate filename
 4. Write file
 
 **Token reduction:** ~60% (Haiku + no file resolution logic in prompt)
 
 #### `/res_match` (Streamlined)
-1. `vault_resolve` → find job file
-2. `vault_rank` → pre-computed scores + matched skills
+1. `rezbldr_resolve` → find job file
+2. `rezbldr_rank` → pre-computed scores + matched skills
 3. **LLM (Frontier):** Semantic analysis on top-8 files only
 4. **LLM (Frontier):** Interactive coaching loop
-5. `vault_score_diff` → show improvement after edits
+5. `rezbldr_score_diff` → show improvement after edits
 
 **Token reduction:** ~40% (no scoring logic in prompt, skip bottom files)
 
 #### `/res_build` (Streamlined)
-1. `vault_resolve` → find job file
-2. `vault_rank` → pre-ranked experience files
+1. `rezbldr_resolve` → find job file
+2. `rezbldr_rank` → pre-ranked experience files
 3. **LLM (Frontier):** Synthesize resume + cover letter
-4. `vault_validate` → check output
-5. `vault_resolve` → generate output path
+4. `rezbldr_validate` → check output
+5. `rezbldr_resolve` → generate output path
 6. Write files
 
 **Token reduction:** ~35% (no scoring, no validation logic in prompt)
 
 #### `/res_export` → **DELETED**
-Replaced entirely by `vault_export`. User calls it directly:
+Replaced entirely by `rezbldr_export`. User calls it directly:
 ```
-vault_export resumes/generated/john_suykerbuyk_2026-04-04-micron_resume.md
+rezbldr_export resumes/generated/john_suykerbuyk_2026-04-04-micron_resume.md
 ```
 Or /res_build calls it automatically after writing.
 
 **Token reduction:** 100%
 
 #### `/res_train` (Simplified)
-1. `vault_resolve` → find job file
-2. `vault_rank` → identify gaps (skills not in matched sets)
+1. `rezbldr_resolve` → find job file
+2. `rezbldr_rank` → identify gaps (skills not in matched sets)
 3. **LLM (Haiku subagent):** Generate learning paths for gaps
 4. Write/update training files
 
@@ -262,7 +262,7 @@ Or /res_build calls it automatically after writing.
 
 #### `/wrap` (Simplified)
 1. **LLM (mid-tier):** Write iteration narrative + commit message
-2. `vault_wrap` → stage, commit, push
+2. `rezbldr_wrap` → stage, commit, push
 
 **Token reduction:** ~40%
 
@@ -284,17 +284,17 @@ res_build creative work). The remaining ~19K shifts to Haiku, which is
 
 ### Implementation Priority
 
-1. **`vault_export`** — Immediate, highest ROI. Zero LLM involvement,
+1. **`rezbldr_export`** — Immediate, highest ROI. Zero LLM involvement,
    replaces an entire skill, simple to implement and test.
-2. **`vault_rank`** — High ROI. Eliminates duplicated logic, reduces
+2. **`rezbldr_rank`** — High ROI. Eliminates duplicated logic, reduces
    context loading in the two most token-heavy skills.
-3. **`vault_resolve`** — Medium ROI. Small per-invocation savings but
+3. **`rezbldr_resolve`** — Medium ROI. Small per-invocation savings but
    used in every skill.
-4. **`vault_validate`** — Medium ROI. Catches errors without LLM
+4. **`rezbldr_validate`** — Medium ROI. Catches errors without LLM
    re-reading source files.
-5. **`vault_wrap`** — Lower ROI but removes git operation prompting.
-6. **`vault_frontmatter`** — Nice-to-have. Reduces prompt complexity.
-7. **`vault_score_diff`** — Nice-to-have. Coaching loop quality-of-life.
+5. **`rezbldr_wrap`** — Lower ROI but removes git operation prompting.
+6. **`rezbldr_frontmatter`** — Nice-to-have. Reduces prompt complexity.
+7. **`rezbldr_score_diff`** — Nice-to-have. Coaching loop quality-of-life.
 
 ### Tech Stack Recommendation
 
@@ -411,7 +411,7 @@ flowchart TD
     end
 
     subgraph PARSE["res_parse — Haiku subagent"]
-        P1["vault_resolve → filename<br/><i>MCP tool</i>"]
+        P1["rezbldr_resolve → filename<br/><i>MCP tool</i>"]
         P2[Fetch/Read content]
         P3["Extract structured data<br/><i>Haiku subagent</i>"]
         P4[Write job file]
@@ -419,38 +419,38 @@ flowchart TD
     end
 
     subgraph MATCH["res_match — Frontier for coaching"]
-        MR["vault_rank → scored files<br/><i>MCP tool</i>"]
+        MR["rezbldr_rank → scored files<br/><i>MCP tool</i>"]
         M4["Semantic analysis on top-8<br/><i>Frontier</i>"]
         M6[Present results]
         M7{"Gaps?"}
         M8["Coaching loop<br/><i>Frontier — CORE VALUE</i>"]
         M9[Edit vault files]
-        MSD["vault_score_diff<br/><i>MCP tool</i>"]
+        MSD["rezbldr_score_diff<br/><i>MCP tool</i>"]
         MR --> M4 --> M6 --> M7
         M7 -->|Yes| M8 --> M9 --> MSD
         M7 -->|No| BR
     end
 
     subgraph BUILD["res_build — Frontier for synthesis"]
-        BR["vault_rank → top files<br/><i>MCP tool (cached)</i>"]
+        BR["rezbldr_rank → top files<br/><i>MCP tool (cached)</i>"]
         B2[Present selection]
         B3{"Approved?"}
         B4["Synthesize resume + cover<br/><i>Frontier — CORE VALUE</i>"]
-        BV["vault_validate<br/><i>MCP tool</i>"]
-        BRE["vault_resolve → paths<br/><i>MCP tool</i>"]
+        BV["rezbldr_validate<br/><i>MCP tool</i>"]
+        BRE["rezbldr_resolve → paths<br/><i>MCP tool</i>"]
         B7[Write files]
         BR --> B2 --> B3
         B3 -->|Yes| B4 --> BV --> BRE --> B7
         B3 -->|Adjust| B2
     end
 
-    subgraph EXPORT["vault_export — Zero LLM"]
-        EX["vault_export<br/><i>MCP tool — replaces entire skill</i>"]
+    subgraph EXPORT["rezbldr_export — Zero LLM"]
+        EX["rezbldr_export<br/><i>MCP tool — replaces entire skill</i>"]
     end
 
     subgraph WRAP["wrap — Simplified"]
         W1["Write narrative + commit msg<br/><i>Sonnet subagent</i>"]
-        WR["vault_wrap<br/><i>MCP tool</i>"]
+        WR["rezbldr_wrap<br/><i>MCP tool</i>"]
         W1 --> WR
     end
 
@@ -486,7 +486,7 @@ stateDiagram-v2
         Frontmatter: skills, tags, comp
     end note
 
-    Parsed --> Scored: vault_rank
+    Parsed --> Scored: rezbldr_rank
     note right of Scored
         Experience files ranked
         Required/preferred/tag matches
@@ -501,7 +501,7 @@ stateDiagram-v2
 
     Coaching --> VaultEnriched: User recalls experience
     Coaching --> GapAcknowledged: Genuine gap
-    VaultEnriched --> ReScored: vault_score_diff
+    VaultEnriched --> ReScored: rezbldr_score_diff
     GapAcknowledged --> ReScored
     ReScored --> GapCheck: Next gap
 
@@ -510,7 +510,7 @@ stateDiagram-v2
     ReadyToBuild --> ResumeGenerated: Frontier synthesis
     note right of ResumeGenerated
         Resume + cover letter
-        Validated by vault_validate
+        Validated by rezbldr_validate
     end note
 
     ResumeGenerated --> ReviewCheck
@@ -521,7 +521,7 @@ stateDiagram-v2
 
     Exported --> Committed: /wrap
     note right of Exported
-        DOCX + PDF via vault_export
+        DOCX + PDF via rezbldr_export
         Zero LLM tokens
     end note
 
@@ -546,13 +546,13 @@ stateDiagram-v2
 flowchart LR
     subgraph LOCAL["Local Machine — resumectl-mcp"]
         direction TB
-        VR[vault_resolve]
-        VK[vault_rank]
-        VV[vault_validate]
-        VE[vault_export]
-        VW[vault_wrap]
-        VF[vault_frontmatter]
-        VS[vault_score_diff]
+        VR[rezbldr_resolve]
+        VK[rezbldr_rank]
+        VV[rezbldr_validate]
+        VE[rezbldr_export]
+        VW[rezbldr_wrap]
+        VF[rezbldr_frontmatter]
+        VS[rezbldr_score_diff]
     end
 
     subgraph HAIKU["Haiku Subagent — Cheap extraction"]
@@ -627,7 +627,7 @@ flowchart LR
    if /res_match already scored for a job, /res_build shouldn't re-score.
 
 3. **Stop loading all 15 experience files into context for every skill.**
-   After vault_rank pre-scores, the LLM only needs to read the top 5-8
+   After rezbldr_rank pre-scores, the LLM only needs to read the top 5-8
    files plus the gap-specific files. This alone saves ~15K tokens per
    invocation in /res_match and /res_build.
 

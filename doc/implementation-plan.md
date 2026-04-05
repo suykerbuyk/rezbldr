@@ -267,12 +267,12 @@ File: `cmd/rezbldr/main.go`
 - Accept `--vault` flag for vault path override
 - Structured logging to stderr (never stdout — that's MCP transport)
 
-### Task 3.2: `vault_rank` Tool
+### Task 3.2: `rezbldr_rank` Tool
 
 **Replaces:** Tag intersection scoring in `/res_match` and `/res_build`.
 
 ```
-Tool: vault_rank
+Tool: rezbldr_rank
 Input:
   job_file: string  — path to job file, or "latest"
   top_n: int        — number of results to return (default: 8)
@@ -289,12 +289,12 @@ Handler:
 4. `scoring.Score(job, vault, ranked)`
 5. Return top_n results + match score
 
-### Task 3.3: `vault_export` Tool
+### Task 3.3: `rezbldr_export` Tool
 
 **Replaces:** The entire `/res_export` skill (153 lines of prompt → 0 LLM tokens).
 
 ```
-Tool: vault_export
+Tool: rezbldr_export
 Input:
   source: string    — path to resume .md file, or "latest"
   format: string    — "docx" or "pdf" (default: "docx")
@@ -316,12 +316,12 @@ Handler:
 8. Clean up temp files
 9. Return results
 
-### Task 3.4: `vault_resolve` Tool
+### Task 3.4: `rezbldr_resolve` Tool
 
 **Replaces:** The "resolve file" preamble in 4 skills.
 
 ```
-Tool: vault_resolve
+Tool: rezbldr_resolve
 Input:
   type: string      — "job" | "resume" | "cover" | "experience"
   slug: string      — optional company slug
@@ -342,12 +342,12 @@ Actions:
 
 ## Phase 4: Validation + Git Tools
 
-### Task 4.1: `vault_validate` Tool
+### Task 4.1: `rezbldr_validate` Tool
 
 **Replaces:** The validation step in `/res_build`.
 
 ```
-Tool: vault_validate
+Tool: rezbldr_validate
 Input:
   resume_path: string
 Output:
@@ -370,12 +370,12 @@ Implementation:
 - Extract company names from h3 headings, check against experience files
 - Compare contact line against contact.md fields
 
-### Task 4.2: `vault_wrap` Tool
+### Task 4.2: `rezbldr_wrap` Tool
 
 **Replaces:** The git portion of `/wrap`.
 
 ```
-Tool: vault_wrap
+Tool: rezbldr_wrap
 Input:
   commit_message: string
   files: []string             — explicit file paths to stage
@@ -394,12 +394,12 @@ Implementation:
 4. For each remote: `git push <remote> main`, capture result
 5. Return aggregate result
 
-### Task 4.3: `vault_frontmatter` Tool
+### Task 4.3: `rezbldr_frontmatter` Tool
 
 **Replaces:** Repeated frontmatter handling across all skills.
 
 ```
-Tool: vault_frontmatter
+Tool: rezbldr_frontmatter
 Input:
   file: string
   action: string  — "parse" | "strip" | "generate"
@@ -410,12 +410,12 @@ Output:
   content: string       — for "generate"
 ```
 
-### Task 4.4: `vault_score_diff` Tool
+### Task 4.4: `rezbldr_score_diff` Tool
 
 **Used during:** Coaching loop in `/res_match`.
 
 ```
-Tool: vault_score_diff
+Tool: rezbldr_score_diff
 Input:
   job_file: string
   changed_files: []string  — experience files modified during coaching
@@ -452,7 +452,7 @@ Add to Claude Code's MCP configuration:
 ### Task 5.2: Rewrite `/res_match`
 
 Current: 186 lines, includes scoring algorithm description.
-Target: ~80 lines, delegates scoring to `vault_rank`.
+Target: ~80 lines, delegates scoring to `rezbldr_rank`.
 
 ```markdown
 Gap analysis between a job posting and your experience vault.
@@ -461,7 +461,7 @@ Input: $ARGUMENTS — path to job file, or omit for latest.
 
 ## Step 1: Get ranked data
 
-Call `vault_rank` with the job file path (or "latest").
+Call `rezbldr_rank` with the job file path (or "latest").
 Read the match_score and ranked results.
 
 ## Step 2: Semantic analysis
@@ -472,7 +472,7 @@ For each required skill in match_score.required_misses:
 ## Step 3: Coaching loop
 
 [... same coaching instructions ...]
-After each vault edit, call `vault_score_diff` to show improvement.
+After each vault edit, call `rezbldr_score_diff` to show improvement.
 ```
 
 ### Task 5.3: Rewrite `/res_build`
@@ -483,7 +483,7 @@ Target: ~120 lines, delegates ranking and validation.
 ```markdown
 ## Step 1: Get ranked experience files
 
-Call `vault_rank` with the job file. Use the top N files.
+Call `rezbldr_rank` with the job file. Use the top N files.
 
 ## Step 2: Synthesize resume
 
@@ -491,28 +491,28 @@ Call `vault_rank` with the job file. Use the top N files.
 
 ## Step 3: Validate
 
-Call `vault_validate` on the written file.
+Call `rezbldr_validate` on the written file.
 If warnings, fix them. If clean, proceed.
 
 ## Step 4: Export
 
-Call `vault_export` to generate DOCX + PDF.
+Call `rezbldr_export` to generate DOCX + PDF.
 ```
 
 ### Task 5.4: Rewrite `/res_export`
 
 **Delete entirely.** Replace with a one-liner in CLAUDE.md:
-"To export a resume, call the `vault_export` MCP tool directly."
+"To export a resume, call the `rezbldr_export` MCP tool directly."
 
 Or keep as a thin passthrough skill:
 ```markdown
-Call `vault_export` with source=$ARGUMENTS. Report the results.
+Call `rezbldr_export` with source=$ARGUMENTS. Report the results.
 ```
 
 ### Task 5.5: Rewrite `/wrap`
 
 Current: 60 lines mixing LLM narrative + git operations.
-Target: ~30 lines. LLM writes narrative, `vault_wrap` handles git.
+Target: ~30 lines. LLM writes narrative, `rezbldr_wrap` handles git.
 
 ### Task 5.6: Consider `/res_parse` subagent
 
@@ -547,9 +547,9 @@ when the algorithm intentionally changes.
 
 ### Integration Tests
 
-- `vault_export`: Requires pandoc installed. Skip with
+- `rezbldr_export`: Requires pandoc installed. Skip with
   `testing.Short()` if pandoc not found.
-- `vault_wrap`: Use a temp git repo. Verify commit hash, file staging,
+- `rezbldr_wrap`: Use a temp git repo. Verify commit hash, file staging,
   remote push (mock remote with `git init --bare`).
 
 ### Target: 80% Coverage
@@ -573,7 +573,7 @@ This is an orchestration layer on top of the tools. Could be:
 
 ### 7.2: Vault Enrichment Suggestions
 
-Extend `vault_rank` to return not just scores but specific enrichment
+Extend `rezbldr_rank` to return not just scores but specific enrichment
 suggestions: "Experience file X mentions technology Y in body text but
 doesn't have it in the tags array." This turns passive scoring into
 active vault maintenance.
@@ -608,15 +608,15 @@ Phase 2 (Scoring)
 
 Phase 3 (MCP + First Tools)
   3.1 MCP server skeleton ← independent
-  3.2 vault_rank tool ← depends on 1.3, 2.1, 2.2, 3.1
-  3.3 vault_export tool ← depends on 1.1 (frontmatter strip), 3.1
-  3.4 vault_resolve tool ← depends on 1.3, 3.1
+  3.2 rezbldr_rank tool ← depends on 1.3, 2.1, 2.2, 3.1
+  3.3 rezbldr_export tool ← depends on 1.1 (frontmatter strip), 3.1
+  3.4 rezbldr_resolve tool ← depends on 1.3, 3.1
 
 Phase 4 (Remaining Tools)
-  4.1 vault_validate ← depends on 1.3, 3.1
-  4.2 vault_wrap ← depends on 3.1
-  4.3 vault_frontmatter ← depends on 1.1, 3.1
-  4.4 vault_score_diff ← depends on 2.4, 3.1
+  4.1 rezbldr_validate ← depends on 1.3, 3.1
+  4.2 rezbldr_wrap ← depends on 3.1
+  4.3 rezbldr_frontmatter ← depends on 1.1, 3.1
+  4.4 rezbldr_score_diff ← depends on 2.4, 3.1
 
 Phase 5 (Skill Rewrites)
   5.1 Register MCP server ← depends on 3.1
@@ -629,7 +629,7 @@ Phase 6 (Testing)
 **Critical path:** 1.1 → 1.2 → 1.3 → 2.1 → 3.1+3.2 → 5.2 (first
 end-to-end improvement visible).
 
-**Quick win path:** 3.1 → 3.3 (vault_export kills /res_export immediately,
+**Quick win path:** 3.1 → 3.3 (rezbldr_export kills /res_export immediately,
 no vault access layer needed — just frontmatter strip + pandoc).
 
 ---
