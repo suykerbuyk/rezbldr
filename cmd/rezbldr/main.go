@@ -11,10 +11,22 @@ import (
 	"path/filepath"
 
 	"github.com/mark3labs/mcp-go/server"
+	installer "github.com/suykerbuyk/claude-plugin-installer"
 	"github.com/suykerbuyk/rezbldr/internal/check"
 	"github.com/suykerbuyk/rezbldr/internal/install"
-	"github.com/suykerbuyk/rezbldr/internal/plugin"
 )
+
+// rezbldrIdentity returns the Identity used when installing rezbldr as a
+// Claude Code plugin. Centralized so cmdSetup, cmdUninstall, cmdCheck, and
+// the check package all agree on the same values.
+func rezbldrIdentity() installer.Identity {
+	return installer.Identity{
+		PluginName:          "rezbldr",
+		PluginDesc:          "MCP server for deterministic resume pipeline operations",
+		McpArgs:             []string{"serve"},
+		LegacyMcpServerName: "rezbldr",
+	}.WithDefaults()
+}
 
 // Version variables injected via ldflags at build time.
 var (
@@ -148,11 +160,11 @@ func cmdSetup(args []string) {
 		log.Fatalf("copying binary: %v", err)
 	}
 
-	paths, err := plugin.Default()
+	paths, err := installer.Default(rezbldrIdentity())
 	if err != nil {
 		log.Fatalf("resolving plugin paths: %v", err)
 	}
-	cfg := plugin.Config{
+	cfg := installer.Config{
 		Version:    version,
 		BinaryPath: binaryPath,
 	}
@@ -160,7 +172,7 @@ func cmdSetup(args []string) {
 		cfg.ExtraArgs = []string{"--vault", vaultPath}
 	}
 
-	if err := plugin.Install(paths, cfg); err != nil {
+	if err := installer.Install(paths, cfg); err != nil {
 		log.Fatalf("plugin install: %v", err)
 	}
 
@@ -202,12 +214,12 @@ func cmdUninstall(args []string) {
 		prefix = filepath.Join(home, ".local")
 	}
 
-	paths, err := plugin.Default()
+	paths, err := installer.Default(rezbldrIdentity())
 	if err != nil {
 		log.Fatalf("resolving plugin paths: %v", err)
 	}
 
-	if err := plugin.Uninstall(paths); err != nil {
+	if err := installer.Uninstall(paths); err != nil {
 		log.Fatalf("plugin uninstall: %v", err)
 	}
 

@@ -12,8 +12,20 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/suykerbuyk/rezbldr/internal/plugin"
+	installer "github.com/suykerbuyk/claude-plugin-installer"
 )
+
+// identity returns the rezbldr plugin Identity. Duplicated here to keep
+// the check package independent of cmd/rezbldr; both must agree on the
+// same values.
+func identity() installer.Identity {
+	return installer.Identity{
+		PluginName:          "rezbldr",
+		PluginDesc:          "MCP server for deterministic resume pipeline operations",
+		McpArgs:             []string{"serve"},
+		LegacyMcpServerName: "rezbldr",
+	}.WithDefaults()
+}
 
 // Result describes the outcome of a single check.
 type Result struct {
@@ -143,7 +155,7 @@ func checkContactFile(vaultPath string) Result {
 // surfaced as a separate Result so `rezbldr check` gives actionable
 // diagnostics when one layer is out of sync.
 func checkPluginInstall() []Result {
-	paths, err := plugin.Default()
+	paths, err := installer.Default(identity())
 	if err != nil {
 		return []Result{{
 			Name:   "mcp-plugin",
@@ -154,10 +166,10 @@ func checkPluginInstall() []Result {
 	return CheckPluginAt(paths)
 }
 
-// CheckPluginAt is CheckPluginInstall parameterized on plugin.Paths for
+// CheckPluginAt is CheckPluginInstall parameterized on installer.Paths for
 // testing against a fake HOME.
-func CheckPluginAt(paths plugin.Paths) []Result {
-	status := plugin.HealthCheck(paths)
+func CheckPluginAt(paths installer.Paths) []Result {
+	status := installer.HealthCheck(paths)
 	if status.FirstError != nil {
 		return []Result{{
 			Name:   "mcp-plugin",
@@ -188,7 +200,7 @@ func CheckPluginAt(paths plugin.Paths) []Result {
 		results = append(results, Result{
 			Name:   "mcp-plugin-settings",
 			Status: "ok",
-			Detail: fmt.Sprintf("%s registered in %s", plugin.PluginKey, filepath.Base(paths.Settings)),
+			Detail: fmt.Sprintf("%s registered in %s", paths.Identity.PluginKey(), filepath.Base(paths.Settings)),
 		})
 	} else {
 		results = append(results, Result{
@@ -233,7 +245,8 @@ func CheckPluginAt(paths plugin.Paths) []Result {
 // bug #2682 registration), ~/.claude.json projects[*].mcpServers.rezbldr
 // (iteration 11 — project-scoped), and ~/.claude/.mcp.json (early).
 func checkLegacyRegistrations() Result {
-	paths, err := plugin.Default()
+	id := identity()
+	paths, err := installer.Default(id)
 	if err != nil {
 		return Result{
 			Name:   "mcp-legacy",
@@ -244,8 +257,8 @@ func checkLegacyRegistrations() Result {
 
 	var stale []string
 
-	if hasLegacy, _ := plugin.HasLegacyMcpServer(paths); hasLegacy {
-		stale = append(stale, filepath.Base(paths.Settings)+" mcpServers.rezbldr")
+	if hasLegacy, _ := installer.HasLegacyMcpServer(paths); hasLegacy {
+		stale = append(stale, filepath.Base(paths.Settings)+" mcpServers."+id.LegacyMcpServerName)
 	}
 
 	// ~/.claude.json projects[*].mcpServers.rezbldr.
@@ -314,7 +327,7 @@ func findProjectScopedEntries(claudeJsonPath string) []string {
 		if err := json.Unmarshal(mcpRaw, &servers); err != nil {
 			continue
 		}
-		if _, ok := servers[plugin.PluginName]; ok {
+		if _, ok := servers[identity().PluginName]; ok {
 			found = append(found, projectPath)
 		}
 	}
@@ -340,6 +353,6 @@ func findMcpJsonEntry(path string) (bool, error) {
 	if err := json.Unmarshal(serversRaw, &servers); err != nil {
 		return false, err
 	}
-	_, found := servers[plugin.PluginName]
+	_, found := servers[identity().PluginName]
 	return found, nil
 }

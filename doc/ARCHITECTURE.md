@@ -39,12 +39,13 @@ graph TD
     CMD --> GITOPS["internal/gitops"]
     CMD --> CHECK["internal/check"]
     CMD --> INSTALL["internal/install"]
-    CMD --> PLUGIN["internal/plugin"]
 
     SCORING --> VAULT
     EXPORT --> VAULT
     VALIDATE --> VAULT
-    CHECK --> PLUGIN
+
+    CMD --> INSTALLER["claude-plugin-installer<br/>(github.com/suykerbuyk/claude-plugin-installer)"]
+    CHECK --> INSTALLER
 
     CMD --> MCPGO["mcp-go<br/>(github.com/mark3labs/mcp-go)"]
     CMD --> YAMLV3["gopkg.in/yaml.v3"]
@@ -53,6 +54,7 @@ graph TD
     style CMD fill:#4a9eff,color:#fff
     style MCPGO fill:#ff9f43,color:#fff
     style YAMLV3 fill:#ff9f43,color:#fff
+    style INSTALLER fill:#ff9f43,color:#fff
 ```
 
 **Notes on the dependency graph:**
@@ -65,8 +67,10 @@ graph TD
   `Experience`, and `Contact` types used in cross-referencing.
 - `internal/resolve`, `internal/gitops`, and `internal/install` have no
   internal dependencies -- they use only the standard library.
-- `internal/plugin` has no internal dependencies; `internal/check` imports
-  it to report on plugin-installation health via `plugin.HealthCheck`.
+- Plugin-install lives in the external `claude-plugin-installer` module
+  (same author); `cmd/rezbldr` and `internal/check` both import it. The
+  module is shared with vibe-vault and any other Claude Code plugin that
+  wants the same install pattern.
 - `cmd/rezbldr` imports `mcp-go` for server setup and tool registration, and
   `yaml.v3` directly in `tool_frontmatter.go` for ad-hoc YAML unmarshalling.
 
@@ -280,7 +284,7 @@ resumes), contact.md presence, Claude Code MCP settings registration.
 **Purpose:** Binary copy plus cleanup of legacy registration entries left by
 earlier iterations of the installer (project-scoped entries in
 `~/.claude.json`, stale entries in `~/.claude/.mcp.json`). Current MCP
-registration lives in `internal/plugin`.
+registration lives in the external `claude-plugin-installer` module.
 
 - `CopyBinary(dstPath)` -- Copies the running executable to the destination,
   atomically via a same-directory temp file + rename.
@@ -292,25 +296,23 @@ registration lives in `internal/plugin`.
 
 **Depends on:** standard library only
 
-### internal/plugin
+### github.com/suykerbuyk/claude-plugin-installer (external)
 
 **Purpose:** Install rezbldr as a Claude Code plugin so its MCP tools
 actually reach the model. See section 9 ("Claude Code plugin installation")
-for the motivation.
+for the motivation. Extracted from `internal/plugin` in Phase 2 so the
+same code can serve rezbldr, vibe-vault, and future consumers.
 
-- `Install(paths, cfg)` -- Full provisioning: `Generate` + `AddSettingsEntries`
-  + `Inject` + `RemoveLegacyMcpServer`.
-- `Uninstall(paths)` -- Reverses `Install`; idempotent against partial state.
-- `Generate(paths, cfg)` -- Writes `marketplace.json`, `plugin.json`, and
-  `.mcp.json` under `~/.local/share/rezbldr/claude-plugin/`.
-- `AddSettingsEntries(paths)` / `RemoveSettingsEntries(paths)` -- Manage
-  `extraKnownMarketplaces["rezbldr-local"]` and
-  `enabledPlugins["rezbldr@rezbldr-local"]` in `~/.claude/settings.json`.
-- `Inject(paths, cfg)` / `Uninject(paths)` -- Cache injection under
-  `~/.claude/plugins/cache/` plus entries in `known_marketplaces.json` and
-  `installed_plugins.json` (v2 schema).
-- `HealthCheck(paths)` -- Returns a `Status` reporting on all four layers
-  for `rezbldr check` to consume.
+rezbldr supplies an `installer.Identity` at each call site (plugin name,
+description, MCP args, legacy mcp-server name for migration cleanup); the
+module parameterizes all four install layers off that identity.
+
+- `installer.Install(paths, cfg)` -- Full provisioning.
+- `installer.Uninstall(paths)` -- Reverses install; idempotent.
+- `installer.HealthCheck(paths)` -- Returns a `Status` reporting on all
+  four layers for `rezbldr check` to consume.
+- `Config.SkipSettings` -- Opts out of `~/.claude/settings.json` mutation
+  for callers that manage settings directly.
 
 **Depends on:** standard library only
 
@@ -422,7 +424,8 @@ operation.
 `mcpServers.rezbldr` entry from `~/.claude/settings.json` (the iteration-12
 artifact of bug #2682).
 
-**Why vendored, not extracted:** Phase 1 keeps `internal/plugin` local to
-rezbldr to validate the pattern works. Phase 2 (separate effort) extracts
-a reusable `claude-plugin-installer` Go module and migrates both rezbldr
-and vibe-vault to consume it.
+**Extraction:** Phase 1 kept the install code local to rezbldr while the
+pattern was validated. Phase 2 extracted it as
+`github.com/suykerbuyk/claude-plugin-installer` (v0.1.0); rezbldr migrated
+to consume the module in the same PR as the extraction. vibe-vault's
+migration is Phase 2c, tracked separately.

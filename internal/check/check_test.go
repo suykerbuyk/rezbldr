@@ -9,8 +9,12 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/suykerbuyk/rezbldr/internal/plugin"
+	installer "github.com/suykerbuyk/claude-plugin-installer"
 )
+
+func testIdentity() installer.Identity {
+	return identity()
+}
 
 // makeVault creates a minimal valid vault structure in a temp directory.
 func makeVault(t *testing.T) string {
@@ -103,9 +107,9 @@ func TestCheckContactFile_Missing(t *testing.T) {
 
 func TestCheckPluginAt_FreshInstall(t *testing.T) {
 	home := t.TempDir()
-	paths := plugin.FromHome(home)
-	cfg := plugin.Config{Version: "0.2.0", BinaryPath: "/bin/rezbldr"}
-	if err := plugin.Install(paths, cfg); err != nil {
+	paths := installer.FromHome(home, testIdentity())
+	cfg := installer.Config{Version: "0.2.0", BinaryPath: "/bin/rezbldr"}
+	if err := installer.Install(paths, cfg); err != nil {
 		t.Fatalf("setup Install: %v", err)
 	}
 
@@ -122,7 +126,7 @@ func TestCheckPluginAt_FreshInstall(t *testing.T) {
 
 func TestCheckPluginAt_NothingInstalled(t *testing.T) {
 	home := t.TempDir()
-	paths := plugin.FromHome(home)
+	paths := installer.FromHome(home, testIdentity())
 	results := CheckPluginAt(paths)
 	if len(results) != 3 {
 		t.Fatalf("expected 3 plugin results, got %d", len(results))
@@ -137,8 +141,8 @@ func TestCheckPluginAt_NothingInstalled(t *testing.T) {
 func TestCheckPluginAt_PartialInstall(t *testing.T) {
 	// Only generate manifests; leave settings + cache absent.
 	home := t.TempDir()
-	paths := plugin.FromHome(home)
-	if err := plugin.Generate(paths, plugin.Config{Version: "0.2.0", BinaryPath: "/bin/rezbldr"}); err != nil {
+	paths := installer.FromHome(home, testIdentity())
+	if err := installer.Generate(paths, installer.Config{Version: "0.2.0", BinaryPath: "/bin/rezbldr"}); err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
 
@@ -160,7 +164,7 @@ func TestCheckPluginAt_PartialInstall(t *testing.T) {
 
 func TestCheckPluginAt_HealthCheckReadError(t *testing.T) {
 	home := t.TempDir()
-	paths := plugin.FromHome(home)
+	paths := installer.FromHome(home, testIdentity())
 	// Write an invalid settings.json so HealthCheck surfaces an error.
 	_ = os.MkdirAll(filepath.Dir(paths.Settings), 0o755)
 	_ = os.WriteFile(paths.Settings, []byte("{not json"), 0o644)

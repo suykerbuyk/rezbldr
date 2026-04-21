@@ -3,7 +3,7 @@
 
 //go:build integration
 
-package plugin_test
+package installintegration_test
 
 import (
 	"bytes"
@@ -16,8 +16,20 @@ import (
 	"testing"
 	"time"
 
-	"github.com/suykerbuyk/rezbldr/internal/plugin"
+	installer "github.com/suykerbuyk/claude-plugin-installer"
 )
+
+// rezbldrIdentity mirrors the identity the real cmd/rezbldr constructs.
+// Keeping it in the test file means the integration test is locked to the
+// production values without a wider refactor.
+func rezbldrIdentity() installer.Identity {
+	return installer.Identity{
+		PluginName:          "rezbldr",
+		PluginDesc:          "MCP server for deterministic resume pipeline operations",
+		McpArgs:             []string{"serve"},
+		LegacyMcpServerName: "rezbldr",
+	}.WithDefaults()
+}
 
 // TestIntegration_InstallProbeUninstall is the full end-to-end validation:
 // build the rezbldr binary, install it as a plugin under a fake HOME,
@@ -28,9 +40,8 @@ import (
 // on PATH.
 func TestIntegration_InstallProbeUninstall(t *testing.T) {
 	home := t.TempDir()
-	paths := plugin.FromHome(home)
+	paths := installer.FromHome(home, rezbldrIdentity())
 
-	// Build rezbldr into a temp bin dir.
 	binDir := filepath.Join(home, ".local", "bin")
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatalf("mkdir binDir: %v", err)
@@ -45,16 +56,14 @@ func TestIntegration_InstallProbeUninstall(t *testing.T) {
 		t.Fatalf("building rezbldr: %v", err)
 	}
 
-	// Install as a plugin.
-	cfg := plugin.Config{
+	cfg := installer.Config{
 		Version:    "0.0.0-integration",
 		BinaryPath: binaryPath,
 	}
-	if err := plugin.Install(paths, cfg); err != nil {
-		t.Fatalf("plugin.Install: %v", err)
+	if err := installer.Install(paths, cfg); err != nil {
+		t.Fatalf("installer.Install: %v", err)
 	}
 
-	// Sanity: all expected files exist.
 	for _, p := range []string{
 		paths.MarketplaceManifest, paths.PluginManifest, paths.McpJson,
 		paths.Settings, paths.KnownMarketplaces, paths.InstalledPlugins,
@@ -64,11 +73,10 @@ func TestIntegration_InstallProbeUninstall(t *testing.T) {
 			t.Errorf("expected %s: %v", p, err)
 		}
 	}
-	if !plugin.HealthCheck(paths).Healthy() {
-		t.Fatalf("HealthCheck not healthy after install: %+v", plugin.HealthCheck(paths))
+	if !installer.HealthCheck(paths).Healthy() {
+		t.Fatalf("HealthCheck not healthy after install: %+v", installer.HealthCheck(paths))
 	}
 
-	// Speak MCP JSON-RPC to the installed binary via its `serve` mode.
 	tools := probeMCPTools(t, binaryPath)
 	if len(tools) == 0 {
 		t.Fatal("no tools reported by rezbldr serve")
@@ -93,21 +101,19 @@ func TestIntegration_InstallProbeUninstall(t *testing.T) {
 		}
 	}
 
-	// Uninstall.
-	if err := plugin.Uninstall(paths); err != nil {
-		t.Fatalf("plugin.Uninstall: %v", err)
+	if err := installer.Uninstall(paths); err != nil {
+		t.Fatalf("installer.Uninstall: %v", err)
 	}
 	for _, p := range []string{paths.MarketplaceManifest, paths.KnownMarketplaces, paths.InstalledPlugins} {
 		if _, err := os.Stat(p); !os.IsNotExist(err) {
 			t.Errorf("expected %s to be removed after Uninstall (err=%v)", p, err)
 		}
 	}
-	if plugin.HealthCheck(paths).Healthy() {
+	if installer.HealthCheck(paths).Healthy() {
 		t.Error("HealthCheck reports healthy after uninstall")
 	}
 }
 
-// findRepoRoot walks up from the test file until it finds a go.mod.
 func findRepoRoot(t *testing.T) string {
 	t.Helper()
 	cwd, err := os.Getwd()
@@ -127,12 +133,9 @@ func findRepoRoot(t *testing.T) string {
 	}
 }
 
-// probeMCPTools invokes `<binary> serve`, sends an MCP initialize + tools/list
-// request pair, and returns the tool names from the response. Times out at 5s.
 func probeMCPTools(t *testing.T, binaryPath string) []string {
 	t.Helper()
 
-	// Prepare a fake vault so serve doesn't reject startup.
 	vault := t.TempDir()
 	_ = os.MkdirAll(filepath.Join(vault, "profile"), 0o755)
 	_ = os.MkdirAll(filepath.Join(vault, "jobs", "target"), 0o755)
@@ -158,7 +161,6 @@ func probeMCPTools(t *testing.T, binaryPath string) []string {
 		_ = cmd.Wait()
 	}()
 
-	// Send initialize + initialized + tools/list.
 	req := strings.Join([]string{
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"integration","version":"0"}}}`,
 		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
@@ -169,12 +171,10 @@ func probeMCPTools(t *testing.T, binaryPath string) []string {
 		t.Fatalf("write: %v", err)
 	}
 
-	// Read response with timeout.
 	done := make(chan []byte, 1)
 	go func() {
 		var buf bytes.Buffer
 		scan := make([]byte, 16*1024)
-		// Read until we have both responses (id:1 and id:2) or EOF.
 		for {
 			n, err := stdout.Read(scan)
 			if n > 0 {
@@ -198,7 +198,6 @@ func probeMCPTools(t *testing.T, binaryPath string) []string {
 		t.Fatal("timeout waiting for tools/list response")
 	}
 
-	// Parse; find the tools/list response.
 	var tools []string
 	for _, line := range bytes.Split(raw, []byte("\n")) {
 		if len(line) == 0 {
