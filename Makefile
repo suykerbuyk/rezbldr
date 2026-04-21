@@ -56,6 +56,14 @@ install: build ## Build and install binary to PREFIX
 setup: install ## Install binary and register as global MCP server
 	$(PREFIX)/bin/rezbldr setup
 
+.PHONY: uninstall
+uninstall: ## Unregister MCP plugin and remove installed binary
+	@if [ -x $(PREFIX)/bin/rezbldr ]; then \
+		$(PREFIX)/bin/rezbldr uninstall --prefix $(PREFIX); \
+	else \
+		echo "$(PREFIX)/bin/rezbldr not found; nothing to uninstall"; \
+	fi
+
 ##@ Clean
 .PHONY: clean
 clean: ## Remove build artifacts
