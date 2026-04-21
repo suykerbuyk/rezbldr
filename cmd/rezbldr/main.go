@@ -38,6 +38,11 @@ var (
 // Config holds runtime configuration for all tool handlers.
 type Config struct {
 	VaultPath string
+	// ExtraVaults maps a short name (e.g. "vibe") to the absolute path of
+	// an additional git repo that rezbldr_wrap is allowed to operate on.
+	// The set is server-configured; MCP callers only see the names, never
+	// the paths.
+	ExtraVaults map[string]string
 }
 
 func main() {
@@ -140,6 +145,8 @@ func cmdSetup(args []string) {
 	var vaultPath, prefix string
 	fs.StringVar(&vaultPath, "vault", "", "path to Obsidian vault (default: ~/obsidian/RezBldrVault)")
 	fs.StringVar(&prefix, "prefix", "", "installation prefix; binary at PREFIX/bin/rezbldr (default: ~/.local)")
+	extraVaults := newExtraVaultFlag()
+	fs.Var(extraVaults, "extra-vault", "additional named vault for rezbldr_wrap (repeatable, format: name=path). Persisted into the plugin's serve args.")
 	fs.Parse(args)
 
 	home, err := os.UserHomeDir()
@@ -169,7 +176,10 @@ func cmdSetup(args []string) {
 		BinaryPath: binaryPath,
 	}
 	if vaultPath != "" {
-		cfg.ExtraArgs = []string{"--vault", vaultPath}
+		cfg.ExtraArgs = append(cfg.ExtraArgs, "--vault", vaultPath)
+	}
+	for _, entry := range extraVaults.sortedEntries() {
+		cfg.ExtraArgs = append(cfg.ExtraArgs, "--extra-vault", entry)
 	}
 
 	if err := installer.Install(paths, cfg); err != nil {
@@ -249,6 +259,8 @@ func cmdServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	var vaultPath string
 	fs.StringVar(&vaultPath, "vault", "", "path to Obsidian vault for resume documents (default: ~/obsidian/RezBldrVault)")
+	extraVaults := newExtraVaultFlag()
+	fs.Var(extraVaults, "extra-vault", "additional named vault for rezbldr_wrap (repeatable, format: name=path)")
 	// Skip the "serve" subcommand itself if present.
 	if len(args) > 0 && args[0] == "serve" {
 		args = args[1:]
@@ -271,7 +283,15 @@ func cmdServe(args []string) {
 		log.Fatalf("vault not found at %s: %v", vaultPath, err)
 	}
 
-	cfg := &Config{VaultPath: vaultPath}
+	envExtras, err := parseExtraVaultsEnv(os.Getenv("REZBLDR_EXTRA_VAULTS"))
+	if err != nil {
+		log.Fatalf("parsing REZBLDR_EXTRA_VAULTS: %v", err)
+	}
+
+	cfg := &Config{
+		VaultPath:   vaultPath,
+		ExtraVaults: mergeExtraVaults(extraVaults.values, envExtras),
+	}
 
 	s := server.NewMCPServer(
 		"rezbldr",

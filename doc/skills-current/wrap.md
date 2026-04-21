@@ -45,11 +45,27 @@ After committing project files, sync vault changes to all remotes by calling
 `rezbldr_wrap` with:
 - `commit_message`: a short summary of the vault changes (e.g., "Update
   resume.md and iterations.md for iteration N")
-- `files`: array of vault file paths that were modified (resume.md,
-  iterations.md, any task files, etc.)
+- `files`: array of file paths that were modified, relative to the target
+  vault's repo root
+- `vault` (optional): name of a server-registered extra vault to target.
+  Omit to target the default RezBldrVault. Pass `"vibe"` (when registered)
+  to target the VibeVault repo where `agentctx/resume.md` and
+  `agentctx/iterations.md` live for this project.
+
+For projects whose `resume.md` / `iterations.md` live under a VibeVault
+`agentctx/` directory (separate repo from RezBldrVault), make two
+`rezbldr_wrap` calls:
+1. One with `vault: "vibe"` to sync the `agentctx/` files.
+2. If any RezBldrVault-side files (jobs, resumes, cover letters) changed,
+   a second call with no `vault` param for those.
+
+If the `vibe` extra vault is not registered, fall back to direct `git`
+commands against the VibeVault repo. To register it, re-run `rezbldr setup
+--extra-vault vibe=~/obsidian/VibeVault` (or set `REZBLDR_EXTRA_VAULTS`).
 
 The tool handles staging, committing, remote discovery, and pushing to all
-configured remotes. Report the commit hash and push results.
+configured remotes for the selected vault. Report the commit hash and push
+results.
 
 If `rezbldr_wrap` reports push failures for some remotes, show the errors
 and continue — local state is still valid.

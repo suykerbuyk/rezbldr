@@ -60,7 +60,7 @@ rezbldr check
 | `rezbldr_export` | Export a resume (and matching cover letter) to DOCX or PDF via pandoc |
 | `rezbldr_resolve` | Resolve file paths in the vault using naming conventions |
 | `rezbldr_validate` | Validate a generated resume against vault data (word count, headings, skills, companies, contact) |
-| `rezbldr_wrap` | Stage, commit, and push vault files to all remotes |
+| `rezbldr_wrap` | Stage, commit, and push files to all remotes for the configured vault or a named extra vault (`vault` param) |
 | `rezbldr_frontmatter` | Parse, strip, or generate YAML frontmatter for vault files |
 | `rezbldr_score_diff` | Compute score change after vault edits during a coaching loop |
 
@@ -124,8 +124,21 @@ resolved in this order:
 2. `REZBLDR_VAULT` environment variable
 3. Default: `~/obsidian/RezBldrVault`
 
-Run `rezbldr install` to write the MCP server registration into
-`~/.claude/settings.local.json`. Claude Code then launches rezbldr as a child
+### Extra vaults for `rezbldr_wrap`
+
+`rezbldr_wrap` defaults to the configured RezBldrVault, but can also commit
+and push to additional named repos (e.g. a project's VibeVault `agentctx/`
+files, which live in a separate repo). Register them at setup or serve time:
+
+- Flag (repeatable): `--extra-vault name=path` on `rezbldr serve` and
+  `rezbldr setup`. Setup persists these into the plugin's MCP args.
+- Env: `REZBLDR_EXTRA_VAULTS="vibe=~/obsidian/VibeVault,palace=~/obsidian/Palace"`.
+
+MCP callers select an extra vault by name via the `vault` parameter on
+`rezbldr_wrap`; they never see server-side paths.
+
+Run `rezbldr setup` to write the MCP server registration into
+`~/.claude/settings.json`. Claude Code then launches rezbldr as a child
 process, communicating over stdin/stdout using the MCP JSON-RPC protocol.
 
 ## Building from Source

@@ -14,16 +14,19 @@ import (
 
 func registerWrapTool(s *server.MCPServer, cfg *Config) {
 	tool := mcp.NewTool("rezbldr_wrap",
-		mcp.WithDescription("Stage, commit, and push vault files to all remotes"),
+		mcp.WithDescription("Stage, commit, and push files to all remotes for the configured vault (default: RezBldrVault) or a server-registered named extra vault"),
 		mcp.WithString("commit_message",
 			mcp.Required(),
 			mcp.Description("Git commit message"),
 		),
 		mcp.WithArray("files",
 			mcp.Required(),
-			mcp.Description("Vault file paths to stage and commit (relative to vault root)"),
+			mcp.Description("File paths to stage and commit (relative to the selected vault's repo root)"),
 			mcp.WithStringItems(),
 			mcp.MinItems(1),
+		),
+		mcp.WithString("vault",
+			mcp.Description("Name of a server-registered extra vault to target (e.g. \"vibe\"). Omit to use the default RezBldrVault."),
 		),
 	)
 
@@ -53,8 +56,13 @@ func registerWrapTool(s *server.MCPServer, cfg *Config) {
 			files = append(files, s)
 		}
 
+		repoDir, err := resolveWrapRepo(cfg, mcp.ExtractString(args, "vault"))
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+
 		result, err := gitops.Wrap(gitops.WrapRequest{
-			RepoDir:       cfg.VaultPath,
+			RepoDir:       repoDir,
 			CommitMessage: commitMsg,
 			Files:         files,
 		})
