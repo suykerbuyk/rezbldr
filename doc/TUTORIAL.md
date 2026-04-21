@@ -39,8 +39,11 @@ make setup
 ```
 
 `make setup` builds the binary, installs it to `~/.local/bin/`, and registers
-it as a global MCP server in `~/.claude/settings.json`. Restart Claude Code
-after running this.
+it as a Claude Code plugin (writing manifest files under
+`~/.local/share/rezbldr/claude-plugin/`, updating `~/.claude/settings.json`,
+and populating `~/.claude/plugins/`). Restart Claude Code after running this.
+See [ARCHITECTURE.md §9](ARCHITECTURE.md) for why the plugin path is
+required (Claude Code bug #2682).
 
 ### From Go directly
 
@@ -76,19 +79,27 @@ register manually:
 rezbldr setup
 ```
 
-This writes an MCP server entry into `~/.claude/settings.json` (global, visible
-in all projects) so that Claude Code knows how to launch rezbldr:
+This installs rezbldr as a Claude Code plugin. Four layers get written:
 
-```json
-{
-  "mcpServers": {
-    "rezbldr": {
-      "command": "/home/you/.local/bin/rezbldr",
-      "args": ["serve"]
-    }
-  }
-}
-```
+1. **Marketplace source** at `~/.local/share/rezbldr/claude-plugin/` —
+   contains `marketplace.json`, `plugin.json`, and an `.mcp.json` that tells
+   Claude Code how to launch rezbldr:
+
+   ```json
+   { "rezbldr": { "command": "/home/you/.local/bin/rezbldr", "args": ["serve"] } }
+   ```
+
+2. **Settings bridge** in `~/.claude/settings.json` — adds
+   `extraKnownMarketplaces["rezbldr-local"]` pointing at the marketplace dir
+   and `enabledPlugins["rezbldr@rezbldr-local"] = true`.
+
+3. **Cache mirror** under `~/.claude/plugins/cache/rezbldr-local/rezbldr/`
+   — the same `.mcp.json` and `plugin.json`, duplicated so Claude Code's
+   plugin loader never has to materialize them itself.
+
+4. **Registry entries** in `~/.claude/plugins/known_marketplaces.json` and
+   `~/.claude/plugins/installed_plugins.json` (v2 schema) — also populated
+   directly for reliability.
 
 rezbldr auto-detects the vault at the default location
 (`~/obsidian/RezBldrVault`). If your vault is elsewhere, pass the path
@@ -98,12 +109,13 @@ explicitly:
 rezbldr setup --vault /path/to/your/vault
 ```
 
-This adds `--vault /path/to/your/vault` to the `args` array in the settings
-file so that every MCP session uses the correct vault path.
+This adds `--vault /path/to/your/vault` to the `args` array baked into the
+plugin's `.mcp.json`.
 
-If you previously used `rezbldr install`, the `setup` command automatically
-migrates old project-scoped entries from `~/.claude.json` and cleans up any
-stale entries in `~/.claude/.mcp.json`.
+`setup` also cleans up any legacy registration artifacts from earlier
+rezbldr iterations: `mcpServers.rezbldr` entries in
+`~/.claude/settings.json` (iteration 12), project-scoped entries in
+`~/.claude.json` (iteration 11), and residue in `~/.claude/.mcp.json`.
 
 ## Verify your setup
 
@@ -122,7 +134,9 @@ Example output when everything is working:
 [✓] vault: /home/you/obsidian/RezBldrVault
 [✓] vault-structure: found profile, jobs/target, resumes
 [✓] contact: profile/contact.md
-[✓] mcp-global: rezbldr registered in settings.json
+[✓] mcp-plugin-files: /home/you/.local/share/rezbldr/claude-plugin
+[✓] mcp-plugin-settings: rezbldr@rezbldr-local registered in settings.json
+[✓] mcp-plugin-cache: cache and registry entries present
 [✓] mcp-legacy: no stale entries
 ```
 
@@ -136,7 +150,9 @@ If something fails:
 | `vault` | Create the vault directory or pass `--vault` to point to it |
 | `vault-structure` | Create the missing subdirectories (see next section) |
 | `contact` | Create `profile/contact.md` in your vault |
-| `mcp-global` | Run `rezbldr setup` |
+| `mcp-plugin-files` | Run `rezbldr setup` (marketplace files missing) |
+| `mcp-plugin-settings` | Run `rezbldr setup` (settings entries missing) |
+| `mcp-plugin-cache` | Run `rezbldr setup` (cache or registry entries out of sync) |
 | `mcp-legacy` | Run `rezbldr setup` to migrate stale entries |
 
 ## Set up a vault
@@ -252,15 +268,22 @@ rezbldr setup --vault /your/actual/vault/path
 `sudo pacman -S pandoc`. Then run `rezbldr check` to confirm.
 
 **Tools not appearing in Claude Code** -- Run `rezbldr setup` to register
-the MCP server globally, then restart Claude Code. Check that the registration
-exists:
+the plugin, then restart Claude Code. Check that all four installation
+layers are present:
 
 ```
 rezbldr check
 ```
 
-Look for the `mcp-global` line. If it shows `warn`, the registration
-did not take effect.
+Look for the `mcp-plugin-files`, `mcp-plugin-settings`, and
+`mcp-plugin-cache` lines. If any show `fail`, the installation is
+incomplete and re-running `rezbldr setup` will repair it. If `mcp-legacy`
+shows `warn`, an earlier iteration left stale entries in `~/.claude/` —
+`rezbldr setup` migrates them automatically.
+
+A common pitfall after a successful `rezbldr setup`: Claude Code only
+reads plugin state at session startup. If rezbldr tools do not appear,
+fully quit and relaunch Claude Code (not just reload the window).
 
 **MCP connection errors** -- Verify that rezbldr can start without errors:
 

@@ -4,11 +4,12 @@
 package check
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
+
+	"github.com/suykerbuyk/rezbldr/internal/plugin"
 )
 
 // makeVault creates a minimal valid vault structure in a temp directory.
@@ -98,92 +99,78 @@ func TestCheckContactFile_Missing(t *testing.T) {
 	}
 }
 
-// --- Global registration checks ---
+// --- Plugin-path install checks ---
 
-func TestFindGlobalMCPServer_NotFound(t *testing.T) {
-	found, _ := findGlobalMCPServer("/nonexistent/settings.json")
-	if found {
-		t.Error("expected not found for nonexistent file")
+func TestCheckPluginAt_FreshInstall(t *testing.T) {
+	home := t.TempDir()
+	paths := plugin.FromHome(home)
+	cfg := plugin.Config{Version: "0.2.0", BinaryPath: "/bin/rezbldr"}
+	if err := plugin.Install(paths, cfg); err != nil {
+		t.Fatalf("setup Install: %v", err)
+	}
+
+	results := CheckPluginAt(paths)
+	if len(results) != 3 {
+		t.Fatalf("expected 3 plugin results, got %d: %+v", len(results), results)
+	}
+	for _, r := range results {
+		if r.Status != "ok" {
+			t.Errorf("%s: expected ok, got %s (%s)", r.Name, r.Status, r.Detail)
+		}
 	}
 }
 
-func TestFindGlobalMCPServer_WithRezbldr(t *testing.T) {
-	dir := t.TempDir()
-	p := filepath.Join(dir, "settings.json")
-	content := `{"mcpServers":{"rezbldr":{"command":"/usr/local/bin/rezbldr","args":["serve"]}}}`
-	os.WriteFile(p, []byte(content), 0o644)
-
-	found, cmd := findGlobalMCPServer(p)
-	if !found {
-		t.Error("expected to find rezbldr")
+func TestCheckPluginAt_NothingInstalled(t *testing.T) {
+	home := t.TempDir()
+	paths := plugin.FromHome(home)
+	results := CheckPluginAt(paths)
+	if len(results) != 3 {
+		t.Fatalf("expected 3 plugin results, got %d", len(results))
 	}
-	if cmd != "/usr/local/bin/rezbldr" {
-		t.Errorf("expected command /usr/local/bin/rezbldr, got %s", cmd)
-	}
-}
-
-func TestFindGlobalMCPServer_WithoutRezbldr(t *testing.T) {
-	dir := t.TempDir()
-	p := filepath.Join(dir, "settings.json")
-	content := `{"mcpServers":{"other":{"command":"other"}}}`
-	os.WriteFile(p, []byte(content), 0o644)
-
-	found, _ := findGlobalMCPServer(p)
-	if found {
-		t.Error("expected not to find rezbldr")
+	for _, r := range results {
+		if r.Status != "fail" {
+			t.Errorf("%s: expected fail (nothing installed), got %s: %s", r.Name, r.Status, r.Detail)
+		}
 	}
 }
 
-func TestFindGlobalMCPServer_InvalidJSON(t *testing.T) {
-	dir := t.TempDir()
-	p := filepath.Join(dir, "settings.json")
-	os.WriteFile(p, []byte("not json"), 0o644)
+func TestCheckPluginAt_PartialInstall(t *testing.T) {
+	// Only generate manifests; leave settings + cache absent.
+	home := t.TempDir()
+	paths := plugin.FromHome(home)
+	if err := plugin.Generate(paths, plugin.Config{Version: "0.2.0", BinaryPath: "/bin/rezbldr"}); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
 
-	found, _ := findGlobalMCPServer(p)
-	if found {
-		t.Error("expected not found for invalid JSON")
+	results := CheckPluginAt(paths)
+	statusBy := make(map[string]string)
+	for _, r := range results {
+		statusBy[r.Name] = r.Status
+	}
+	if statusBy["mcp-plugin-files"] != "ok" {
+		t.Errorf("mcp-plugin-files: expected ok, got %s", statusBy["mcp-plugin-files"])
+	}
+	if statusBy["mcp-plugin-settings"] != "fail" {
+		t.Errorf("mcp-plugin-settings: expected fail, got %s", statusBy["mcp-plugin-settings"])
+	}
+	if statusBy["mcp-plugin-cache"] != "fail" {
+		t.Errorf("mcp-plugin-cache: expected fail, got %s", statusBy["mcp-plugin-cache"])
 	}
 }
 
-func TestCheckGlobalConfig_Registered(t *testing.T) {
-	dir := t.TempDir()
-	p := filepath.Join(dir, "settings.json")
+func TestCheckPluginAt_HealthCheckReadError(t *testing.T) {
+	home := t.TempDir()
+	paths := plugin.FromHome(home)
+	// Write an invalid settings.json so HealthCheck surfaces an error.
+	_ = os.MkdirAll(filepath.Dir(paths.Settings), 0o755)
+	_ = os.WriteFile(paths.Settings, []byte("{not json"), 0o644)
 
-	binDir := filepath.Join(dir, "bin")
-	os.MkdirAll(binDir, 0o755)
-	binPath := filepath.Join(binDir, "rezbldr")
-	os.WriteFile(binPath, []byte("binary"), 0o755)
-
-	content := `{"mcpServers":{"rezbldr":{"command":"` + binPath + `","args":["serve"]}}}`
-	os.WriteFile(p, []byte(content), 0o644)
-
-	r := CheckGlobalConfig(p)
-	if r.Status != "ok" {
-		t.Errorf("expected ok, got %s: %s", r.Status, r.Detail)
+	results := CheckPluginAt(paths)
+	if len(results) != 1 {
+		t.Fatalf("expected 1 failure result, got %+v", results)
 	}
-}
-
-func TestCheckGlobalConfig_BinaryMissing(t *testing.T) {
-	dir := t.TempDir()
-	p := filepath.Join(dir, "settings.json")
-	content := `{"mcpServers":{"rezbldr":{"command":"/nonexistent/rezbldr","args":["serve"]}}}`
-	os.WriteFile(p, []byte(content), 0o644)
-
-	r := CheckGlobalConfig(p)
-	if r.Status != "warn" {
-		t.Errorf("expected warn, got %s: %s", r.Status, r.Detail)
-	}
-}
-
-func TestCheckGlobalConfig_NotRegistered(t *testing.T) {
-	dir := t.TempDir()
-	p := filepath.Join(dir, "settings.json")
-	content := `{"mcpServers":{}}`
-	os.WriteFile(p, []byte(content), 0o644)
-
-	r := CheckGlobalConfig(p)
-	if r.Status != "warn" {
-		t.Errorf("expected warn, got %s: %s", r.Status, r.Detail)
+	if results[0].Status != "fail" || results[0].Name != "mcp-plugin" {
+		t.Errorf("expected mcp-plugin fail, got %+v", results[0])
 	}
 }
 
@@ -220,20 +207,57 @@ func TestFindProjectScopedEntries_NoFile(t *testing.T) {
 	}
 }
 
+func TestFindProjectScopedEntries_InvalidJSON(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, ".claude.json")
+	os.WriteFile(p, []byte("{not json"), 0o644)
+	found := findProjectScopedEntries(p)
+	if len(found) != 0 {
+		t.Errorf("expected empty on invalid JSON, got %v", found)
+	}
+}
+
+func TestFindMcpJsonEntry(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, ".mcp.json")
+
+	// Missing file.
+	if found, _ := findMcpJsonEntry(p); found {
+		t.Error("expected not found for missing file")
+	}
+
+	// Present.
+	os.WriteFile(p, []byte(`{"mcpServers":{"rezbldr":{"command":"x"}}}`), 0o644)
+	found, err := findMcpJsonEntry(p)
+	if err != nil || !found {
+		t.Errorf("expected (true, nil) when present, got (%v, %v)", found, err)
+	}
+
+	// Absent.
+	os.WriteFile(p, []byte(`{"mcpServers":{"other":{"command":"x"}}}`), 0o644)
+	found, err = findMcpJsonEntry(p)
+	if err != nil || found {
+		t.Errorf("expected (false, nil) when absent, got (%v, %v)", found, err)
+	}
+}
+
+// --- Run integration ---
+
 func TestRun_ValidVault(t *testing.T) {
 	dir := makeVault(t)
 	results := Run(dir)
 
-	// Should have 8 results (go, pandoc, git, vault, vault-structure, contact, mcp-global, mcp-legacy).
-	if len(results) != 8 {
+	// Expect 10 results: go, pandoc, git, vault, vault-structure, contact,
+	// mcp-plugin-files, mcp-plugin-settings, mcp-plugin-cache, mcp-legacy.
+	if len(results) != 10 {
 		names := make([]string, len(results))
 		for i, r := range results {
 			names[i] = r.Name
 		}
-		t.Fatalf("expected 8 results, got %d: %v", len(results), names)
+		t.Fatalf("expected 10 results, got %d: %v", len(results), names)
 	}
 
-	// Check that vault-related checks pass.
+	// Vault-related checks should pass.
 	for _, r := range results {
 		switch r.Name {
 		case "go", "vault", "vault-structure", "contact":
@@ -253,21 +277,8 @@ func TestRun_InvalidVault(t *testing.T) {
 			failures++
 		}
 	}
-	// vault, vault-structure, contact should all fail.
+	// At minimum vault, vault-structure, contact should fail.
 	if failures < 3 {
 		t.Errorf("expected at least 3 failures for invalid vault, got %d", failures)
-	}
-}
-
-// helper for install tests that need JSON reading
-func writeJSON(t *testing.T, path string, v interface{}) {
-	t.Helper()
-	data, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	data = append(data, '\n')
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		t.Fatal(err)
 	}
 }

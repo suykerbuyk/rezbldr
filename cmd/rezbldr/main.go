@@ -13,6 +13,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/suykerbuyk/rezbldr/internal/check"
 	"github.com/suykerbuyk/rezbldr/internal/install"
+	"github.com/suykerbuyk/rezbldr/internal/plugin"
 )
 
 // Version variables injected via ldflags at build time.
@@ -124,10 +125,9 @@ func cmdCheck(args []string) {
 
 func cmdSetup(args []string) {
 	fs := flag.NewFlagSet("setup", flag.ExitOnError)
-	var vaultPath, prefix, settingsPath string
+	var vaultPath, prefix string
 	fs.StringVar(&vaultPath, "vault", "", "path to Obsidian vault (default: ~/obsidian/RezBldrVault)")
 	fs.StringVar(&prefix, "prefix", "", "installation prefix; binary at PREFIX/bin/rezbldr (default: ~/.local)")
-	fs.StringVar(&settingsPath, "settings", "", "Claude Code settings file (default: ~/.claude/settings.json)")
 	fs.Parse(args)
 
 	home, err := os.UserHomeDir()
@@ -144,23 +144,53 @@ func cmdSetup(args []string) {
 	}
 	binaryPath := filepath.Join(prefix, "bin", "rezbldr")
 
-	claudeDir := filepath.Join(home, ".claude")
-	if settingsPath == "" {
-		settingsPath = filepath.Join(claudeDir, "settings.json")
+	if err := install.CopyBinary(binaryPath); err != nil {
+		log.Fatalf("copying binary: %v", err)
 	}
+
+	paths, err := plugin.Default()
+	if err != nil {
+		log.Fatalf("resolving plugin paths: %v", err)
+	}
+	cfg := plugin.Config{
+		Version:    version,
+		BinaryPath: binaryPath,
+	}
+	if vaultPath != "" {
+		cfg.ExtraArgs = []string{"--vault", vaultPath}
+	}
+
+	if err := plugin.Install(paths, cfg); err != nil {
+		log.Fatalf("plugin install: %v", err)
+	}
+
+	// Legacy cleanup: remove iteration-11 project-scoped entries from
+	// ~/.claude.json and iteration-early .mcp.json entries.
 	claudeJsonPath := filepath.Join(home, ".claude.json")
-
-	if err := install.Setup(binaryPath, settingsPath, claudeJsonPath, claudeDir, vaultPath); err != nil {
-		log.Fatalf("setup failed: %v", err)
+	cleaned, err := install.MigrateProjectScoped(claudeJsonPath)
+	if err != nil {
+		log.Fatalf("migrating project-scoped entries: %v", err)
+	}
+	for _, p := range cleaned {
+		fmt.Printf("Migrated: removed rezbldr from project %s in %s\n", p, filepath.Base(claudeJsonPath))
+	}
+	if err := install.CleanupLegacyMcpJson(paths.ClaudeDir); err != nil {
+		log.Fatalf("cleaning legacy .mcp.json: %v", err)
 	}
 
-	fmt.Println("\nSetup complete. Restart Claude Code to load the rezbldr MCP server.")
+	fmt.Printf("\nSetup complete.\n")
+	fmt.Printf("  Marketplace: %s\n", paths.MarketplaceRoot)
+	fmt.Printf("  Settings:    %s\n", paths.Settings)
+	fmt.Printf("  Cache:       %s\n", paths.CacheVersionDir(version))
+	fmt.Println("Restart Claude Code to load the rezbldr MCP server.")
 }
 
 func cmdUninstall(args []string) {
 	fs := flag.NewFlagSet("uninstall", flag.ExitOnError)
 	var prefix string
+	var keepBinary bool
 	fs.StringVar(&prefix, "prefix", "", "installation prefix; binary is at PREFIX/bin/rezbldr (default: ~/.local)")
+	fs.BoolVar(&keepBinary, "keep-binary", false, "leave the installed binary in place")
 	fs.Parse(args)
 
 	home, err := os.UserHomeDir()
@@ -172,16 +202,35 @@ func cmdUninstall(args []string) {
 		prefix = filepath.Join(home, ".local")
 	}
 
-	configPath := filepath.Join(home, ".claude.json")
-	binaryPath := filepath.Join(prefix, "bin", "rezbldr")
-	legacyDir := filepath.Join(home, ".claude")
-
-	// Get cwd for project-scoped cleanup, but don't fail if unavailable.
-	projectDir, _ := os.Getwd()
-
-	if err := install.Uninstall(configPath, projectDir, legacyDir, binaryPath); err != nil {
-		log.Fatalf("uninstall failed: %v", err)
+	paths, err := plugin.Default()
+	if err != nil {
+		log.Fatalf("resolving plugin paths: %v", err)
 	}
+
+	if err := plugin.Uninstall(paths); err != nil {
+		log.Fatalf("plugin uninstall: %v", err)
+	}
+
+	// Legacy cleanup: remove any iteration-11 project-scoped entries and
+	// iteration-early ~/.claude/.mcp.json residue.
+	claudeJsonPath := filepath.Join(home, ".claude.json")
+	if _, err := install.MigrateProjectScoped(claudeJsonPath); err != nil {
+		log.Fatalf("cleaning project-scoped entries: %v", err)
+	}
+	if err := install.CleanupLegacyMcpJson(paths.ClaudeDir); err != nil {
+		log.Fatalf("cleaning legacy .mcp.json: %v", err)
+	}
+
+	if !keepBinary {
+		binaryPath := filepath.Join(prefix, "bin", "rezbldr")
+		if err := os.Remove(binaryPath); err != nil && !os.IsNotExist(err) {
+			log.Fatalf("removing binary %s: %v", binaryPath, err)
+		} else if err == nil {
+			fmt.Printf("Removed binary %s\n", binaryPath)
+		}
+	}
+
+	fmt.Println("Uninstall complete.")
 }
 
 func cmdServe(args []string) {

@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/suykerbuyk/rezbldr/internal/plugin"
 )
 
 // Result describes the outcome of a single check.
@@ -30,7 +32,7 @@ func Run(vaultPath string) []Result {
 	results = append(results, checkVaultPath(vaultPath))
 	results = append(results, checkVaultStructure(vaultPath))
 	results = append(results, checkContactFile(vaultPath))
-	results = append(results, checkGlobalRegistration())
+	results = append(results, checkPluginInstall()...)
 	results = append(results, checkLegacyRegistrations())
 
 	return results
@@ -136,50 +138,102 @@ func checkContactFile(vaultPath string) Result {
 	}
 }
 
-func checkGlobalRegistration() Result {
-	home, err := os.UserHomeDir()
+// checkPluginInstall reports on the four layers of the plugin install:
+// marketplace files, settings entries, cache, and registry files. Each is
+// surfaced as a separate Result so `rezbldr check` gives actionable
+// diagnostics when one layer is out of sync.
+func checkPluginInstall() []Result {
+	paths, err := plugin.Default()
 	if err != nil {
-		return Result{
-			Name:   "mcp-global",
+		return []Result{{
+			Name:   "mcp-plugin",
 			Status: "warn",
-			Detail: "cannot determine home directory",
-		}
+			Detail: fmt.Sprintf("cannot determine home directory: %v", err),
+		}}
 	}
-
-	settingsPath := filepath.Join(home, ".claude", "settings.json")
-	return CheckGlobalConfig(settingsPath)
+	return CheckPluginAt(paths)
 }
 
-// CheckGlobalConfig checks whether rezbldr is registered globally in the
-// given Claude Code settings file under mcpServers. Exported for testing.
-func CheckGlobalConfig(settingsPath string) Result {
-	found, binaryPath := findGlobalMCPServer(settingsPath)
-	if !found {
-		return Result{
-			Name:   "mcp-global",
-			Status: "warn",
-			Detail: "rezbldr not found in global settings (run rezbldr setup)",
-		}
+// CheckPluginAt is CheckPluginInstall parameterized on plugin.Paths for
+// testing against a fake HOME.
+func CheckPluginAt(paths plugin.Paths) []Result {
+	status := plugin.HealthCheck(paths)
+	if status.FirstError != nil {
+		return []Result{{
+			Name:   "mcp-plugin",
+			Status: "fail",
+			Detail: fmt.Sprintf("reading plugin state: %v", status.FirstError),
+		}}
 	}
 
-	if binaryPath != "" {
-		if _, err := os.Stat(binaryPath); err != nil {
-			return Result{
-				Name:   "mcp-global",
-				Status: "warn",
-				Detail: fmt.Sprintf("registered globally but binary not found at %s (run make install)", binaryPath),
-			}
+	var results []Result
+
+	// Marketplace files.
+	if status.MarketplaceFiles {
+		results = append(results, Result{
+			Name:   "mcp-plugin-files",
+			Status: "ok",
+			Detail: paths.MarketplaceRoot,
+		})
+	} else {
+		results = append(results, Result{
+			Name:   "mcp-plugin-files",
+			Status: "fail",
+			Detail: fmt.Sprintf("marketplace files missing under %s (run rezbldr setup)", paths.MarketplaceRoot),
+		})
+	}
+
+	// Settings entries.
+	if status.SettingsEntries {
+		results = append(results, Result{
+			Name:   "mcp-plugin-settings",
+			Status: "ok",
+			Detail: fmt.Sprintf("%s registered in %s", plugin.PluginKey, filepath.Base(paths.Settings)),
+		})
+	} else {
+		results = append(results, Result{
+			Name:   "mcp-plugin-settings",
+			Status: "fail",
+			Detail: fmt.Sprintf("extraKnownMarketplaces/enabledPlugins entries missing in %s (run rezbldr setup)", filepath.Base(paths.Settings)),
+		})
+	}
+
+	// Cache + registries (combined for brevity — all three must be present
+	// for Claude Code's plugin loader to succeed).
+	cacheOk := status.CacheInstalled && status.MarketplaceInReg && status.InstalledPluginInReg
+	if cacheOk {
+		results = append(results, Result{
+			Name:   "mcp-plugin-cache",
+			Status: "ok",
+			Detail: "cache and registry entries present",
+		})
+	} else {
+		var missing []string
+		if !status.CacheInstalled {
+			missing = append(missing, "cache dir")
 		}
+		if !status.MarketplaceInReg {
+			missing = append(missing, "known_marketplaces.json")
+		}
+		if !status.InstalledPluginInReg {
+			missing = append(missing, "installed_plugins.json")
+		}
+		results = append(results, Result{
+			Name:   "mcp-plugin-cache",
+			Status: "fail",
+			Detail: fmt.Sprintf("missing: %s (run rezbldr setup)", strings.Join(missing, ", ")),
+		})
 	}
-	return Result{
-		Name:   "mcp-global",
-		Status: "ok",
-		Detail: fmt.Sprintf("rezbldr registered in %s", filepath.Base(settingsPath)),
-	}
+
+	return results
 }
 
+// checkLegacyRegistrations warns about residual entries from pre-plugin
+// iterations: ~/.claude/settings.json mcpServers.rezbldr (iteration 12 —
+// bug #2682 registration), ~/.claude.json projects[*].mcpServers.rezbldr
+// (iteration 11 — project-scoped), and ~/.claude/.mcp.json (early).
 func checkLegacyRegistrations() Result {
-	home, err := os.UserHomeDir()
+	paths, err := plugin.Default()
 	if err != nil {
 		return Result{
 			Name:   "mcp-legacy",
@@ -190,17 +244,22 @@ func checkLegacyRegistrations() Result {
 
 	var stale []string
 
-	// Check ~/.claude.json projects for any rezbldr entries.
+	if hasLegacy, _ := plugin.HasLegacyMcpServer(paths); hasLegacy {
+		stale = append(stale, filepath.Base(paths.Settings)+" mcpServers.rezbldr")
+	}
+
+	// ~/.claude.json projects[*].mcpServers.rezbldr.
+	home, _ := os.UserHomeDir()
 	claudeJsonPath := filepath.Join(home, ".claude.json")
-	if paths := findProjectScopedEntries(claudeJsonPath); len(paths) > 0 {
-		for _, p := range paths {
+	if projects := findProjectScopedEntries(claudeJsonPath); len(projects) > 0 {
+		for _, p := range projects {
 			stale = append(stale, fmt.Sprintf(".claude.json project %s", p))
 		}
 	}
 
-	// Check ~/.claude/.mcp.json.
-	mcpJsonPath := filepath.Join(home, ".claude", ".mcp.json")
-	if found, _ := findGlobalMCPServer(mcpJsonPath); found {
+	// ~/.claude/.mcp.json.
+	mcpJsonPath := filepath.Join(paths.ClaudeDir, ".mcp.json")
+	if found, _ := findMcpJsonEntry(mcpJsonPath); found {
 		stale = append(stale, ".claude/.mcp.json")
 	}
 
@@ -216,43 +275,6 @@ func checkLegacyRegistrations() Result {
 		Status: "ok",
 		Detail: "no stale entries",
 	}
-}
-
-// findGlobalMCPServer looks for rezbldr in a settings file under
-// mcpServers.rezbldr (top-level, not project-scoped).
-func findGlobalMCPServer(path string) (bool, string) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return false, ""
-	}
-
-	var config map[string]json.RawMessage
-	if err := json.Unmarshal(data, &config); err != nil {
-		return false, ""
-	}
-
-	mcpRaw, ok := config["mcpServers"]
-	if !ok {
-		return false, ""
-	}
-
-	var servers map[string]json.RawMessage
-	if err := json.Unmarshal(mcpRaw, &servers); err != nil {
-		return false, ""
-	}
-
-	raw, ok := servers["rezbldr"]
-	if !ok {
-		return false, ""
-	}
-
-	var stanza struct {
-		Command string `json:"command"`
-	}
-	if err := json.Unmarshal(raw, &stanza); err == nil && stanza.Command != "" {
-		return true, stanza.Command
-	}
-	return true, ""
 }
 
 // findProjectScopedEntries returns project paths in ~/.claude.json that
@@ -292,9 +314,32 @@ func findProjectScopedEntries(claudeJsonPath string) []string {
 		if err := json.Unmarshal(mcpRaw, &servers); err != nil {
 			continue
 		}
-		if _, ok := servers["rezbldr"]; ok {
+		if _, ok := servers[plugin.PluginName]; ok {
 			found = append(found, projectPath)
 		}
 	}
 	return found
+}
+
+// findMcpJsonEntry reports whether ~/.claude/.mcp.json contains a rezbldr
+// entry (legacy iteration-57-era registration).
+func findMcpJsonEntry(path string) (bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+	var config map[string]json.RawMessage
+	if err := json.Unmarshal(data, &config); err != nil {
+		return false, err
+	}
+	serversRaw, ok := config["mcpServers"]
+	if !ok {
+		return false, nil
+	}
+	var servers map[string]json.RawMessage
+	if err := json.Unmarshal(serversRaw, &servers); err != nil {
+		return false, err
+	}
+	_, found := servers[plugin.PluginName]
+	return found, nil
 }

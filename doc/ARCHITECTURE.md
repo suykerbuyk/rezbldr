@@ -39,10 +39,12 @@ graph TD
     CMD --> GITOPS["internal/gitops"]
     CMD --> CHECK["internal/check"]
     CMD --> INSTALL["internal/install"]
+    CMD --> PLUGIN["internal/plugin"]
 
     SCORING --> VAULT
     EXPORT --> VAULT
     VALIDATE --> VAULT
+    CHECK --> PLUGIN
 
     CMD --> MCPGO["mcp-go<br/>(github.com/mark3labs/mcp-go)"]
     CMD --> YAMLV3["gopkg.in/yaml.v3"]
@@ -61,9 +63,10 @@ graph TD
   (frontmatter removal before pandoc conversion).
 - `internal/validate` imports `internal/vault` for the `Vault`, `SkillEntry`,
   `Experience`, and `Contact` types used in cross-referencing.
-- `internal/resolve`, `internal/gitops`, `internal/check`, and
-  `internal/install` have no internal dependencies -- they use only the
-  standard library.
+- `internal/resolve`, `internal/gitops`, and `internal/install` have no
+  internal dependencies -- they use only the standard library.
+- `internal/plugin` has no internal dependencies; `internal/check` imports
+  it to report on plugin-installation health via `plugin.HealthCheck`.
 - `cmd/rezbldr` imports `mcp-go` for server setup and tool registration, and
   `yaml.v3` directly in `tool_frontmatter.go` for ad-hoc YAML unmarshalling.
 
@@ -274,12 +277,40 @@ resumes), contact.md presence, Claude Code MCP settings registration.
 
 ### internal/install
 
-**Purpose:** Registration and removal of the rezbldr MCP server in Claude
-Code settings files.
+**Purpose:** Binary copy plus cleanup of legacy registration entries left by
+earlier iterations of the installer (project-scoped entries in
+`~/.claude.json`, stale entries in `~/.claude/.mcp.json`). Current MCP
+registration lives in `internal/plugin`.
 
-- `Install(binaryPath, settingsDir, vaultPath)` -- Adds/updates rezbldr
-  stanza in `settings.local.json`
-- `Uninstall(settingsDir)` -- Removes rezbldr stanza from settings
+- `CopyBinary(dstPath)` -- Copies the running executable to the destination,
+  atomically via a same-directory temp file + rename.
+- `MigrateProjectScoped(claudeJsonPath)` -- Walks `~/.claude.json`'s
+  `projects[*].mcpServers` and removes any `rezbldr` entries. Returns the
+  project paths that were cleaned.
+- `CleanupLegacyMcpJson(claudeDir)` -- Removes `rezbldr` from
+  `~/.claude/.mcp.json` if present.
+
+**Depends on:** standard library only
+
+### internal/plugin
+
+**Purpose:** Install rezbldr as a Claude Code plugin so its MCP tools
+actually reach the model. See section 9 ("Claude Code plugin installation")
+for the motivation.
+
+- `Install(paths, cfg)` -- Full provisioning: `Generate` + `AddSettingsEntries`
+  + `Inject` + `RemoveLegacyMcpServer`.
+- `Uninstall(paths)` -- Reverses `Install`; idempotent against partial state.
+- `Generate(paths, cfg)` -- Writes `marketplace.json`, `plugin.json`, and
+  `.mcp.json` under `~/.local/share/rezbldr/claude-plugin/`.
+- `AddSettingsEntries(paths)` / `RemoveSettingsEntries(paths)` -- Manage
+  `extraKnownMarketplaces["rezbldr-local"]` and
+  `enabledPlugins["rezbldr@rezbldr-local"]` in `~/.claude/settings.json`.
+- `Inject(paths, cfg)` / `Uninject(paths)` -- Cache injection under
+  `~/.claude/plugins/cache/` plus entries in `known_marketplaces.json` and
+  `installed_plugins.json` (v2 schema).
+- `HealthCheck(paths)` -- Returns a `Status` reporting on all four layers
+  for `rezbldr check` to consume.
 
 **Depends on:** standard library only
 
@@ -315,8 +346,9 @@ For full YAML frontmatter schemas, see `doc/vault-schema.md`.
 | `serve` | Start the MCP server on stdio (default when no subcommand given) |
 | `version` | Print version, commit hash, and build date (injected via ldflags) |
 | `check` | Validate environment and vault: Go, pandoc, git, vault structure, Claude settings |
-| `install` | Register rezbldr in Claude Code `~/.claude/settings.local.json` |
-| `uninstall` | Remove rezbldr from Claude Code settings |
+| `setup` | Install binary, register rezbldr as a Claude Code plugin globally, migrate legacy entries |
+| `install` | Deprecated alias for `setup` |
+| `uninstall` | Reverse `setup`: remove plugin registration, cache, marketplace dir, and binary |
 
 If the first argument looks like a flag (starts with `-`), it is treated as
 arguments to `serve`.
@@ -332,12 +364,65 @@ vault. It is resolved in this order:
 
 The vault path is validated at startup by checking for `profile/contact.md`.
 
-**Claude Code integration:** Run `rezbldr install` to register the server in
-`~/.claude/settings.local.json`. This writes an `mcpServers.rezbldr` stanza
-with the binary path and `--vault` argument. Claude Code then launches rezbldr
-as a child process, communicating over stdin/stdout using the MCP JSON-RPC
-protocol. The `rezbldr check` command verifies that this registration is in
-place.
+**Claude Code integration:** Run `rezbldr setup` to install rezbldr as a
+Claude Code plugin. Under the hood, `setup` copies the binary to
+`~/.local/bin/rezbldr`, generates the marketplace + plugin manifests under
+`~/.local/share/rezbldr/claude-plugin/`, adds `extraKnownMarketplaces` and
+`enabledPlugins` entries to `~/.claude/settings.json`, and injects the
+plugin into Claude Code's internal cache and registry files
+(`~/.claude/plugins/`). Claude Code then launches rezbldr as a child
+process, communicating over stdin/stdout using the MCP JSON-RPC protocol.
+The `rezbldr check` command verifies that the full four-layer installation
+is present and consistent. See section 9 for why the plugin path is
+required.
 
 **Build-time configuration:** Version, commit, and date are injected via Go
 ldflags (see `Makefile`).
+
+## 9. Claude Code plugin installation
+
+**Background.** Claude Code bug #2682: MCP servers registered via
+`mcpServers` entries in `~/.claude/settings.json` or per-project
+`~/.claude.json` register the server process but **fail to register the
+server's tools with the AI**. Plugin-bundled MCP servers use a different,
+working code path for tool registration. rezbldr iterations 10–12
+repeatedly hit this bug; iteration 13+ works around it by mimicking the
+pattern vibe-vault adopted in its own iteration 92/94.
+
+**The four layers.** `rezbldr setup` writes the following, in order:
+
+```
+~/.local/share/rezbldr/claude-plugin/                       (layer 1: marketplace source)
+  .claude-plugin/marketplace.json                           name: rezbldr-local
+  rezbldr/.claude-plugin/plugin.json                        name: rezbldr, version, author
+  rezbldr/.mcp.json                                         { rezbldr: { command, args } }
+
+~/.claude/settings.json                                     (layer 2: settings bridge)
+  extraKnownMarketplaces["rezbldr-local"] = { source: directory, path: ... }
+  enabledPlugins["rezbldr@rezbldr-local"]  = true
+
+~/.claude/plugins/cache/rezbldr-local/rezbldr/<version>/    (layer 3: cache mirror)
+  .claude-plugin/plugin.json                                (duplicate of layer 1)
+  .mcp.json                                                 (duplicate of layer 1)
+
+~/.claude/plugins/known_marketplaces.json                   (layer 4: internal registry)
+  rezbldr-local = { source: directory, installLocation, lastUpdated }
+~/.claude/plugins/installed_plugins.json                    (v2 schema)
+  plugins["rezbldr@rezbldr-local"] = [ { scope: user, installPath, version, ... } ]
+```
+
+Layers 1 and 2 are the designed Claude Code plugin API. Layers 3 and 4 are
+"belt-and-suspenders" injection: Claude Code normally populates these
+itself after processing layer 2, but its plugin loader can fail to do so.
+Writing them directly makes installation robust against that failure mode.
+Sibling marketplaces and plugins (e.g., vibe-vault) are preserved on every
+operation.
+
+**Uninstall reverses all four layers** and also removes any residual
+`mcpServers.rezbldr` entry from `~/.claude/settings.json` (the iteration-12
+artifact of bug #2682).
+
+**Why vendored, not extracted:** Phase 1 keeps `internal/plugin` local to
+rezbldr to validate the pattern works. Phase 2 (separate effort) extracts
+a reusable `claude-plugin-installer` Go module and migrates both rezbldr
+and vibe-vault to consume it.

@@ -29,8 +29,13 @@ build: ## Build the rezbldr binary
 test: ## Run unit tests
 	go test $(GOFLAGS) ./...
 
-.PHONY: integration
-integration: ## Run integration tests (build tag)
+.PHONY: integration test-integration
+integration test-integration: ## Run integration tests (build tag)
+	go test $(GOFLAGS) -tags=integration ./...
+
+.PHONY: test-all
+test-all: ## Run unit + integration tests
+	go test $(GOFLAGS) ./...
 	go test $(GOFLAGS) -tags=integration ./...
 
 .PHONY: cover
