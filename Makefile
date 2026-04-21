@@ -43,9 +43,13 @@ vet: ## Run go vet
 
 ##@ Install
 .PHONY: install
-install: build ## Build and install to PREFIX
+install: build ## Build and install binary to PREFIX
 	install -d $(PREFIX)/bin
 	install -m 755 $(BINARY) $(PREFIX)/bin/
+
+.PHONY: setup
+setup: install ## Install binary and register as global MCP server
+	$(PREFIX)/bin/rezbldr setup
 
 ##@ Clean
 .PHONY: clean

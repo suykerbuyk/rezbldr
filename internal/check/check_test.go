@@ -4,6 +4,7 @@
 package check
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -60,7 +61,6 @@ func TestCheckVaultStructure_Valid(t *testing.T) {
 
 func TestCheckVaultStructure_MissingDirs(t *testing.T) {
 	dir := t.TempDir()
-	// Only create profile, skip jobs/target and resumes.
 	os.MkdirAll(filepath.Join(dir, "profile"), 0o755)
 
 	r := checkVaultStructure(dir)
@@ -91,7 +91,6 @@ func TestCheckContactFile_Valid(t *testing.T) {
 func TestCheckContactFile_Missing(t *testing.T) {
 	dir := t.TempDir()
 	os.MkdirAll(filepath.Join(dir, "profile"), 0o755)
-	// Don't create contact.md.
 
 	r := checkContactFile(dir)
 	if r.Status != "fail" {
@@ -99,20 +98,22 @@ func TestCheckContactFile_Missing(t *testing.T) {
 	}
 }
 
-func TestCheckConfigFile_NotFound(t *testing.T) {
-	found, _ := checkConfigFile("/nonexistent/.claude.json", "/project")
+// --- Global registration checks ---
+
+func TestFindGlobalMCPServer_NotFound(t *testing.T) {
+	found, _ := findGlobalMCPServer("/nonexistent/settings.json")
 	if found {
 		t.Error("expected not found for nonexistent file")
 	}
 }
 
-func TestCheckConfigFile_WithRezbldr(t *testing.T) {
+func TestFindGlobalMCPServer_WithRezbldr(t *testing.T) {
 	dir := t.TempDir()
-	p := filepath.Join(dir, ".claude.json")
-	content := `{"projects":{"/project":{"mcpServers":{"rezbldr":{"command":"/usr/local/bin/rezbldr"}}}}}`
+	p := filepath.Join(dir, "settings.json")
+	content := `{"mcpServers":{"rezbldr":{"command":"/usr/local/bin/rezbldr","args":["serve"]}}}`
 	os.WriteFile(p, []byte(content), 0o644)
 
-	found, cmd := checkConfigFile(p, "/project")
+	found, cmd := findGlobalMCPServer(p)
 	if !found {
 		t.Error("expected to find rezbldr")
 	}
@@ -121,81 +122,101 @@ func TestCheckConfigFile_WithRezbldr(t *testing.T) {
 	}
 }
 
-func TestCheckConfigFile_WrongProject(t *testing.T) {
+func TestFindGlobalMCPServer_WithoutRezbldr(t *testing.T) {
 	dir := t.TempDir()
-	p := filepath.Join(dir, ".claude.json")
-	content := `{"projects":{"/other":{"mcpServers":{"rezbldr":{"command":"/usr/local/bin/rezbldr"}}}}}`
+	p := filepath.Join(dir, "settings.json")
+	content := `{"mcpServers":{"other":{"command":"other"}}}`
 	os.WriteFile(p, []byte(content), 0o644)
 
-	found, _ := checkConfigFile(p, "/project")
-	if found {
-		t.Error("expected not to find rezbldr for different project")
-	}
-}
-
-func TestCheckConfigFile_WithoutRezbldr(t *testing.T) {
-	dir := t.TempDir()
-	p := filepath.Join(dir, ".claude.json")
-	content := `{"projects":{"/project":{"mcpServers":{"other":{"command":"other"}}}}}`
-	os.WriteFile(p, []byte(content), 0o644)
-
-	found, _ := checkConfigFile(p, "/project")
+	found, _ := findGlobalMCPServer(p)
 	if found {
 		t.Error("expected not to find rezbldr")
 	}
 }
 
-func TestCheckConfigFile_InvalidJSON(t *testing.T) {
+func TestFindGlobalMCPServer_InvalidJSON(t *testing.T) {
 	dir := t.TempDir()
-	p := filepath.Join(dir, ".claude.json")
+	p := filepath.Join(dir, "settings.json")
 	os.WriteFile(p, []byte("not json"), 0o644)
 
-	found, _ := checkConfigFile(p, "/project")
+	found, _ := findGlobalMCPServer(p)
 	if found {
 		t.Error("expected not found for invalid JSON")
 	}
 }
 
-func TestCheckClaudeConfig_Registered(t *testing.T) {
+func TestCheckGlobalConfig_Registered(t *testing.T) {
 	dir := t.TempDir()
-	p := filepath.Join(dir, ".claude.json")
+	p := filepath.Join(dir, "settings.json")
 
-	// Create a binary so the stat check passes.
 	binDir := filepath.Join(dir, "bin")
 	os.MkdirAll(binDir, 0o755)
 	binPath := filepath.Join(binDir, "rezbldr")
 	os.WriteFile(binPath, []byte("binary"), 0o755)
 
-	content := `{"projects":{"/project":{"mcpServers":{"rezbldr":{"command":"` + binPath + `"}}}}}`
+	content := `{"mcpServers":{"rezbldr":{"command":"` + binPath + `","args":["serve"]}}}`
 	os.WriteFile(p, []byte(content), 0o644)
 
-	r := CheckClaudeConfig(p, "/project")
+	r := CheckGlobalConfig(p)
 	if r.Status != "ok" {
 		t.Errorf("expected ok, got %s: %s", r.Status, r.Detail)
 	}
 }
 
-func TestCheckClaudeConfig_BinaryMissing(t *testing.T) {
+func TestCheckGlobalConfig_BinaryMissing(t *testing.T) {
 	dir := t.TempDir()
-	p := filepath.Join(dir, ".claude.json")
-	content := `{"projects":{"/project":{"mcpServers":{"rezbldr":{"command":"/nonexistent/rezbldr"}}}}}`
+	p := filepath.Join(dir, "settings.json")
+	content := `{"mcpServers":{"rezbldr":{"command":"/nonexistent/rezbldr","args":["serve"]}}}`
 	os.WriteFile(p, []byte(content), 0o644)
 
-	r := CheckClaudeConfig(p, "/project")
+	r := CheckGlobalConfig(p)
 	if r.Status != "warn" {
 		t.Errorf("expected warn, got %s: %s", r.Status, r.Detail)
 	}
 }
 
-func TestCheckClaudeConfig_NotRegistered(t *testing.T) {
+func TestCheckGlobalConfig_NotRegistered(t *testing.T) {
 	dir := t.TempDir()
-	p := filepath.Join(dir, ".claude.json")
-	content := `{"projects":{}}`
+	p := filepath.Join(dir, "settings.json")
+	content := `{"mcpServers":{}}`
 	os.WriteFile(p, []byte(content), 0o644)
 
-	r := CheckClaudeConfig(p, "/project")
+	r := CheckGlobalConfig(p)
 	if r.Status != "warn" {
 		t.Errorf("expected warn, got %s: %s", r.Status, r.Detail)
+	}
+}
+
+// --- Legacy registration checks ---
+
+func TestFindProjectScopedEntries_Found(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, ".claude.json")
+	content := `{"projects":{"/project-a":{"mcpServers":{"rezbldr":{"command":"x"}}},"/project-b":{"mcpServers":{"other":{"command":"y"}}}}}`
+	os.WriteFile(p, []byte(content), 0o644)
+
+	found := findProjectScopedEntries(p)
+	if len(found) != 1 || found[0] != "/project-a" {
+		t.Errorf("expected [/project-a], got %v", found)
+	}
+}
+
+func TestFindProjectScopedEntries_None(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, ".claude.json")
+	content := `{"projects":{"/project":{"mcpServers":{"other":{"command":"y"}}}}}`
+	os.WriteFile(p, []byte(content), 0o644)
+
+	found := findProjectScopedEntries(p)
+	if len(found) != 0 {
+		t.Errorf("expected empty, got %v", found)
+	}
+}
+
+func TestFindProjectScopedEntries_NoFile(t *testing.T) {
+	found := findProjectScopedEntries("/nonexistent/.claude.json")
+	if len(found) != 0 {
+		t.Errorf("expected empty, got %v", found)
 	}
 }
 
@@ -203,9 +224,13 @@ func TestRun_ValidVault(t *testing.T) {
 	dir := makeVault(t)
 	results := Run(dir)
 
-	// Should have 7 results.
-	if len(results) != 7 {
-		t.Fatalf("expected 7 results, got %d", len(results))
+	// Should have 8 results (go, pandoc, git, vault, vault-structure, contact, mcp-global, mcp-legacy).
+	if len(results) != 8 {
+		names := make([]string, len(results))
+		for i, r := range results {
+			names[i] = r.Name
+		}
+		t.Fatalf("expected 8 results, got %d: %v", len(results), names)
 	}
 
 	// Check that vault-related checks pass.
@@ -231,5 +256,18 @@ func TestRun_InvalidVault(t *testing.T) {
 	// vault, vault-structure, contact should all fail.
 	if failures < 3 {
 		t.Errorf("expected at least 3 failures for invalid vault, got %d", failures)
+	}
+}
+
+// helper for install tests that need JSON reading
+func writeJSON(t *testing.T, path string, v interface{}) {
+	t.Helper()
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = append(data, '\n')
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -19,6 +19,12 @@ func registerWrapTool(s *server.MCPServer, cfg *Config) {
 			mcp.Required(),
 			mcp.Description("Git commit message"),
 		),
+		mcp.WithArray("files",
+			mcp.Required(),
+			mcp.Description("Vault file paths to stage and commit (relative to vault root)"),
+			mcp.WithStringItems(),
+			mcp.MinItems(1),
+		),
 	)
 
 	s.AddTool(tool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {

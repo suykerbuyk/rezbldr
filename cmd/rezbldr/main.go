@@ -41,8 +41,11 @@ func main() {
 		cmdServe(os.Args[1:]) // pass remaining args (may include --vault)
 	case "version":
 		cmdVersion()
+	case "setup":
+		cmdSetup(os.Args[2:])
 	case "install":
-		cmdInstall(os.Args[2:])
+		fmt.Fprintln(os.Stderr, "Warning: 'install' is deprecated, use 'setup' instead")
+		cmdSetup(os.Args[2:])
 	case "check":
 		cmdCheck(os.Args[2:])
 	case "uninstall":
@@ -66,10 +69,10 @@ func printUsage() {
 
 Commands:
   serve       Start the MCP server (default)
-  version     Print version information
-  install     Install rezbldr into MCP client config
-  uninstall   Remove rezbldr from MCP client config
+  setup       Install binary and register as global MCP server
   check       Validate vault and configuration
+  uninstall   Remove rezbldr from MCP client config
+  version     Print version information
   help        Show this help message
 
 Run 'rezbldr serve --help' for serve-specific options.
@@ -119,13 +122,12 @@ func cmdCheck(args []string) {
 	}
 }
 
-func cmdInstall(args []string) {
-	fs := flag.NewFlagSet("install", flag.ExitOnError)
-	var vaultPath, prefix, configPath, projectDir string
-	fs.StringVar(&vaultPath, "vault", "", "path to Obsidian vault for resume documents (default: ~/obsidian/RezBldrVault)")
-	fs.StringVar(&prefix, "prefix", "", "installation prefix; binary is at PREFIX/bin/rezbldr (default: ~/.local)")
-	fs.StringVar(&configPath, "config", "", "Claude Code config file (default: ~/.claude.json)")
-	fs.StringVar(&projectDir, "project", "", "project directory to register for (default: current directory)")
+func cmdSetup(args []string) {
+	fs := flag.NewFlagSet("setup", flag.ExitOnError)
+	var vaultPath, prefix, settingsPath string
+	fs.StringVar(&vaultPath, "vault", "", "path to Obsidian vault (default: ~/obsidian/RezBldrVault)")
+	fs.StringVar(&prefix, "prefix", "", "installation prefix; binary at PREFIX/bin/rezbldr (default: ~/.local)")
+	fs.StringVar(&settingsPath, "settings", "", "Claude Code settings file (default: ~/.claude/settings.json)")
 	fs.Parse(args)
 
 	home, err := os.UserHomeDir()
@@ -142,28 +144,23 @@ func cmdInstall(args []string) {
 	}
 	binaryPath := filepath.Join(prefix, "bin", "rezbldr")
 
-	if configPath == "" {
-		configPath = filepath.Join(home, ".claude.json")
+	claudeDir := filepath.Join(home, ".claude")
+	if settingsPath == "" {
+		settingsPath = filepath.Join(claudeDir, "settings.json")
+	}
+	claudeJsonPath := filepath.Join(home, ".claude.json")
+
+	if err := install.Setup(binaryPath, settingsPath, claudeJsonPath, claudeDir, vaultPath); err != nil {
+		log.Fatalf("setup failed: %v", err)
 	}
 
-	if projectDir == "" {
-		projectDir, err = os.Getwd()
-		if err != nil {
-			log.Fatalf("cannot determine working directory: %v", err)
-		}
-	}
-
-	if err := install.Install(binaryPath, configPath, projectDir, vaultPath); err != nil {
-		log.Fatalf("install failed: %v", err)
-	}
+	fmt.Println("\nSetup complete. Restart Claude Code to load the rezbldr MCP server.")
 }
 
 func cmdUninstall(args []string) {
 	fs := flag.NewFlagSet("uninstall", flag.ExitOnError)
-	var configPath, prefix, projectDir string
-	fs.StringVar(&configPath, "config", "", "Claude Code config file (default: ~/.claude.json)")
+	var prefix string
 	fs.StringVar(&prefix, "prefix", "", "installation prefix; binary is at PREFIX/bin/rezbldr (default: ~/.local)")
-	fs.StringVar(&projectDir, "project", "", "project directory to unregister from (default: current directory)")
 	fs.Parse(args)
 
 	home, err := os.UserHomeDir()
@@ -171,21 +168,16 @@ func cmdUninstall(args []string) {
 		log.Fatalf("cannot determine home directory: %v", err)
 	}
 
-	if configPath == "" {
-		configPath = filepath.Join(home, ".claude.json")
-	}
 	if prefix == "" {
 		prefix = filepath.Join(home, ".local")
 	}
-	if projectDir == "" {
-		projectDir, err = os.Getwd()
-		if err != nil {
-			log.Fatalf("cannot determine working directory: %v", err)
-		}
-	}
 
+	configPath := filepath.Join(home, ".claude.json")
 	binaryPath := filepath.Join(prefix, "bin", "rezbldr")
 	legacyDir := filepath.Join(home, ".claude")
+
+	// Get cwd for project-scoped cleanup, but don't fail if unavailable.
+	projectDir, _ := os.Getwd()
 
 	if err := install.Uninstall(configPath, projectDir, legacyDir, binaryPath); err != nil {
 		log.Fatalf("uninstall failed: %v", err)

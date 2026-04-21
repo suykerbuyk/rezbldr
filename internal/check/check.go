@@ -30,7 +30,8 @@ func Run(vaultPath string) []Result {
 	results = append(results, checkVaultPath(vaultPath))
 	results = append(results, checkVaultStructure(vaultPath))
 	results = append(results, checkContactFile(vaultPath))
-	results = append(results, checkClaudeSettings())
+	results = append(results, checkGlobalRegistration())
+	results = append(results, checkLegacyRegistrations())
 
 	return results
 }
@@ -135,61 +136,91 @@ func checkContactFile(vaultPath string) Result {
 	}
 }
 
-func checkClaudeSettings() Result {
+func checkGlobalRegistration() Result {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return Result{
-			Name:   "claude-settings",
+			Name:   "mcp-global",
 			Status: "warn",
 			Detail: "cannot determine home directory",
 		}
 	}
 
-	cwd, err := os.Getwd()
-	if err != nil {
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	return CheckGlobalConfig(settingsPath)
+}
+
+// CheckGlobalConfig checks whether rezbldr is registered globally in the
+// given Claude Code settings file under mcpServers. Exported for testing.
+func CheckGlobalConfig(settingsPath string) Result {
+	found, binaryPath := findGlobalMCPServer(settingsPath)
+	if !found {
 		return Result{
-			Name:   "claude-settings",
+			Name:   "mcp-global",
 			Status: "warn",
-			Detail: "cannot determine working directory",
+			Detail: "rezbldr not found in global settings (run rezbldr setup)",
 		}
 	}
 
-	configPath := filepath.Join(home, ".claude.json")
-	return CheckClaudeConfig(configPath, cwd)
-}
-
-// CheckClaudeConfig checks whether rezbldr is registered in the given
-// Claude Code config file for the given project directory. Exported for
-// testing with controlled paths.
-func CheckClaudeConfig(configPath, projectDir string) Result {
-	if found, binaryPath := checkConfigFile(configPath, projectDir); found {
-		if binaryPath != "" {
-			if _, err := os.Stat(binaryPath); err != nil {
-				return Result{
-					Name:   "claude-settings",
-					Status: "warn",
-					Detail: fmt.Sprintf("registered in %s but binary not found at %s (run rezbldr install)", filepath.Base(configPath), binaryPath),
-				}
+	if binaryPath != "" {
+		if _, err := os.Stat(binaryPath); err != nil {
+			return Result{
+				Name:   "mcp-global",
+				Status: "warn",
+				Detail: fmt.Sprintf("registered globally but binary not found at %s (run make install)", binaryPath),
 			}
 		}
-		return Result{
-			Name:   "claude-settings",
-			Status: "ok",
-			Detail: fmt.Sprintf("rezbldr registered in %s", filepath.Base(configPath)),
-		}
 	}
-
 	return Result{
-		Name:   "claude-settings",
-		Status: "warn",
-		Detail: "rezbldr not found in Claude Code MCP settings (run rezbldr install)",
+		Name:   "mcp-global",
+		Status: "ok",
+		Detail: fmt.Sprintf("rezbldr registered in %s", filepath.Base(settingsPath)),
 	}
 }
 
-// checkConfigFile looks for rezbldr in ~/.claude.json under
-// projects[projectDir].mcpServers.rezbldr. Returns whether found and the
-// binary command path if extractable.
-func checkConfigFile(path, projectDir string) (bool, string) {
+func checkLegacyRegistrations() Result {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return Result{
+			Name:   "mcp-legacy",
+			Status: "ok",
+			Detail: "no legacy entries (cannot determine home)",
+		}
+	}
+
+	var stale []string
+
+	// Check ~/.claude.json projects for any rezbldr entries.
+	claudeJsonPath := filepath.Join(home, ".claude.json")
+	if paths := findProjectScopedEntries(claudeJsonPath); len(paths) > 0 {
+		for _, p := range paths {
+			stale = append(stale, fmt.Sprintf(".claude.json project %s", p))
+		}
+	}
+
+	// Check ~/.claude/.mcp.json.
+	mcpJsonPath := filepath.Join(home, ".claude", ".mcp.json")
+	if found, _ := findGlobalMCPServer(mcpJsonPath); found {
+		stale = append(stale, ".claude/.mcp.json")
+	}
+
+	if len(stale) > 0 {
+		return Result{
+			Name:   "mcp-legacy",
+			Status: "warn",
+			Detail: fmt.Sprintf("stale entries in %s (run rezbldr setup to migrate)", strings.Join(stale, ", ")),
+		}
+	}
+	return Result{
+		Name:   "mcp-legacy",
+		Status: "ok",
+		Detail: "no stale entries",
+	}
+}
+
+// findGlobalMCPServer looks for rezbldr in a settings file under
+// mcpServers.rezbldr (top-level, not project-scoped).
+func findGlobalMCPServer(path string) (bool, string) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return false, ""
@@ -200,27 +231,7 @@ func checkConfigFile(path, projectDir string) (bool, string) {
 		return false, ""
 	}
 
-	projectsRaw, ok := config["projects"]
-	if !ok {
-		return false, ""
-	}
-
-	var projects map[string]json.RawMessage
-	if err := json.Unmarshal(projectsRaw, &projects); err != nil {
-		return false, ""
-	}
-
-	projectRaw, ok := projects[projectDir]
-	if !ok {
-		return false, ""
-	}
-
-	var project map[string]json.RawMessage
-	if err := json.Unmarshal(projectRaw, &project); err != nil {
-		return false, ""
-	}
-
-	mcpRaw, ok := project["mcpServers"]
+	mcpRaw, ok := config["mcpServers"]
 	if !ok {
 		return false, ""
 	}
@@ -242,4 +253,48 @@ func checkConfigFile(path, projectDir string) (bool, string) {
 		return true, stanza.Command
 	}
 	return true, ""
+}
+
+// findProjectScopedEntries returns project paths in ~/.claude.json that
+// still have rezbldr in their mcpServers.
+func findProjectScopedEntries(claudeJsonPath string) []string {
+	data, err := os.ReadFile(claudeJsonPath)
+	if err != nil {
+		return nil
+	}
+
+	var config map[string]json.RawMessage
+	if err := json.Unmarshal(data, &config); err != nil {
+		return nil
+	}
+
+	projectsRaw, ok := config["projects"]
+	if !ok {
+		return nil
+	}
+
+	var projects map[string]json.RawMessage
+	if err := json.Unmarshal(projectsRaw, &projects); err != nil {
+		return nil
+	}
+
+	var found []string
+	for projectPath, projectRaw := range projects {
+		var project map[string]json.RawMessage
+		if err := json.Unmarshal(projectRaw, &project); err != nil {
+			continue
+		}
+		mcpRaw, ok := project["mcpServers"]
+		if !ok {
+			continue
+		}
+		var servers map[string]json.RawMessage
+		if err := json.Unmarshal(mcpRaw, &servers); err != nil {
+			continue
+		}
+		if _, ok := servers["rezbldr"]; ok {
+			found = append(found, projectPath)
+		}
+	}
+	return found
 }

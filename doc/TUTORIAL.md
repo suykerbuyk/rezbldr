@@ -35,21 +35,22 @@ Install from <https://docs.anthropic.com/en/docs/claude-code>.
 ```
 git clone https://github.com/suykerbuyk/rezbldr.git
 cd rezbldr
-make build
-make install
+make setup
 ```
 
-`make build` compiles the binary with version metadata. `make install` copies
-it to your `$GOPATH/bin`.
+`make setup` builds the binary, installs it to `~/.local/bin/`, and registers
+it as a global MCP server in `~/.claude/settings.json`. Restart Claude Code
+after running this.
 
 ### From Go directly
 
 ```
 go install github.com/suykerbuyk/rezbldr/cmd/rezbldr@latest
+rezbldr setup
 ```
 
-This downloads, builds, and places the binary in your `$GOPATH/bin` in one
-step.
+The first command downloads, builds, and places the binary in your `$GOPATH/bin`.
+The second registers it with Claude Code.
 
 ### Verify the installation
 
@@ -63,26 +64,27 @@ You should see output like:
 rezbldr v0.5.0 (commit: fa3651c, built: 2026-04-05)
 ```
 
-If the command is not found, ensure `$GOPATH/bin` is in your `$PATH`.
+If the command is not found, ensure `~/.local/bin` (or `$GOPATH/bin`) is in
+your `$PATH`.
 
 ## Register with Claude Code
 
-Run:
+The `make setup` step above handles registration automatically. If you need to
+register manually:
 
 ```
-rezbldr install
+rezbldr setup
 ```
 
-This writes an MCP server entry into `~/.claude/settings.local.json` so that
-Claude Code knows how to launch rezbldr. The resulting JSON looks like this:
+This writes an MCP server entry into `~/.claude/settings.json` (global, visible
+in all projects) so that Claude Code knows how to launch rezbldr:
 
 ```json
 {
   "mcpServers": {
     "rezbldr": {
-      "command": "/home/you/go/bin/rezbldr",
-      "args": ["serve"],
-      "env": {}
+      "command": "/home/you/.local/bin/rezbldr",
+      "args": ["serve"]
     }
   }
 }
@@ -93,11 +95,15 @@ rezbldr auto-detects the vault at the default location
 explicitly:
 
 ```
-rezbldr install --vault /path/to/your/vault
+rezbldr setup --vault /path/to/your/vault
 ```
 
 This adds `--vault /path/to/your/vault` to the `args` array in the settings
 file so that every MCP session uses the correct vault path.
+
+If you previously used `rezbldr install`, the `setup` command automatically
+migrates old project-scoped entries from `~/.claude.json` and cleans up any
+stale entries in `~/.claude/.mcp.json`.
 
 ## Verify your setup
 
@@ -116,7 +122,8 @@ Example output when everything is working:
 [✓] vault: /home/you/obsidian/RezBldrVault
 [✓] vault-structure: found profile, jobs/target, resumes
 [✓] contact: profile/contact.md
-[✓] claude-settings: rezbldr registered in settings.local.json
+[✓] mcp-global: rezbldr registered in settings.json
+[✓] mcp-legacy: no stale entries
 ```
 
 If something fails:
@@ -129,7 +136,8 @@ If something fails:
 | `vault` | Create the vault directory or pass `--vault` to point to it |
 | `vault-structure` | Create the missing subdirectories (see next section) |
 | `contact` | Create `profile/contact.md` in your vault |
-| `claude-settings` | Run `rezbldr install` |
+| `mcp-global` | Run `rezbldr setup` |
+| `mcp-legacy` | Run `rezbldr setup` to migrate stale entries |
 
 ## Set up a vault
 
@@ -236,22 +244,22 @@ directory at the default location (`~/obsidian/RezBldrVault`) or specify a
 custom path:
 
 ```
-rezbldr install --vault /your/actual/vault/path
+rezbldr setup --vault /your/actual/vault/path
 ```
 
 **"pandoc not found"** -- Install pandoc. On Debian/Ubuntu:
 `sudo apt install pandoc`. On macOS: `brew install pandoc`. On Arch:
 `sudo pacman -S pandoc`. Then run `rezbldr check` to confirm.
 
-**Tools not appearing in Claude Code** -- Run `rezbldr install` to register
-the MCP server, then restart Claude Code. Check that the registration
+**Tools not appearing in Claude Code** -- Run `rezbldr setup` to register
+the MCP server globally, then restart Claude Code. Check that the registration
 exists:
 
 ```
 rezbldr check
 ```
 
-Look for the `claude-settings` line. If it shows `warn`, the registration
+Look for the `mcp-global` line. If it shows `warn`, the registration
 did not take effect.
 
 **MCP connection errors** -- Verify that rezbldr can start without errors:
